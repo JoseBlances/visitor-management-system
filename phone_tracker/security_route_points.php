@@ -3,6 +3,7 @@ header("Content-Type: application/json; charset=utf-8");
 
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/visit_service.php";
 
 require_roles_json(["security", "admin"]);
 
@@ -14,9 +15,11 @@ if ($appointmentId <= 0 || !preg_match("/^\d{4}-\d{2}-\d{2}$/", $date)) {
     echo json_encode(["success" => false, "message" => "Select a valid visitor and date", "data" => []]);
     exit;
 }
+// A multi-stop visit's route is stored under the stop that owns its tracking session.
+$appointmentId = visit_tracking_appointment_id($conn, $appointmentId);
 
 $appointmentCheck = $conn->prepare(
-    "SELECT id, device_name, checked_in_at, completed_at
+    "SELECT id, status, device_name, checked_in_at, completed_at
      FROM appointments
      WHERE id = ? AND status IN ('checked_in', 'completed')
      LIMIT 1"
@@ -31,6 +34,7 @@ if (!$appointment || !$appointment["checked_in_at"]) {
     echo json_encode(["success" => false, "message" => "Active visitor record not found", "data" => []]);
     exit;
 }
+$appointment = visit_apply_tracking_window($conn, $appointment);
 $device = (string) $appointment["device_name"];
 
 $start = $date . " 00:00:00";

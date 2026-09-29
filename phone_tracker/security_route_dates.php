@@ -3,6 +3,7 @@ header("Content-Type: application/json; charset=utf-8");
 
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/visit_service.php";
 
 require_roles_json(["security", "admin"]);
 
@@ -11,6 +12,8 @@ if ($appointmentId <= 0) {
     echo json_encode(["success" => false, "message" => "Select a valid visitor", "data" => []]);
     exit;
 }
+// A multi-stop visit's route is stored under the stop that owns its tracking session.
+$appointmentId = visit_tracking_appointment_id($conn, $appointmentId);
 
 $appointmentStmt = $conn->prepare(
     "SELECT id, visitor_full_name, status, checked_in_at, completed_at
@@ -27,6 +30,7 @@ if (!$appointment) {
     echo json_encode(["success" => false, "message" => "Visitor route is unavailable", "data" => []]);
     exit;
 }
+$appointment = visit_apply_tracking_window($conn, $appointment);
 
 $dateStmt = $conn->prepare(
     "SELECT DATE(recorded_at) AS route_date, COUNT(*) AS point_count,

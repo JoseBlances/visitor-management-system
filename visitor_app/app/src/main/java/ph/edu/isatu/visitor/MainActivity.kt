@@ -31,8 +31,23 @@ class MainActivity : ComponentActivity() {
         openAppointmentFrom(intent)
     }
 
+    /**
+     * Opens the visit or appointment a notification refers to. Notifications shown by the
+     * app itself carry a Long extra; notifications Android shows from a background push
+     * carry the FCM data values as String extras, so both forms are accepted.
+     */
     private fun openAppointmentFrom(intent: Intent?) {
-        intent?.getLongExtra("appointment_id", 0L)?.takeIf { it > 0 }?.let(viewModel::openAppointment)
+        val visitId = intent.idExtra("visit_id")
+        val appointmentId = intent.idExtra("appointment_id")
+        when {
+            visitId > 0 -> viewModel.openVisit(visitId)
+            appointmentId > 0 -> viewModel.openAppointment(appointmentId)
+        }
+    }
+
+    private fun Intent?.idExtra(name: String): Long {
+        val extras = this?.extras ?: return 0L
+        return extras.getString(name)?.toLongOrNull() ?: extras.getLong(name, 0L)
     }
 }
 

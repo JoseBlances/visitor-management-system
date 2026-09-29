@@ -50,11 +50,12 @@ if ($beforeId > 0) {
     $types .= "i";
     $params[] = $beforeId;
 }
+$visitColumns = visit_appointment_columns($conn);
 $sql =
     "SELECT id, registration_code, public_token, office_code, visitor_full_name, visitor_email,
             contact_number, device_name, visit_type, purpose, destination, subject, additional_details,
             scheduled_start_at, scheduled_end_at, status, status_updated_at, rejection_reason,
-            checked_in_at, completed_at, created_at
+            checked_in_at, completed_at, created_at{$visitColumns}
      FROM appointments WHERE {$where} ORDER BY id DESC LIMIT ?";
 $types .= "i";
 $params[] = $limit + 1;

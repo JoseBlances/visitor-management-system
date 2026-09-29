@@ -51,7 +51,7 @@ import ph.edu.isatu.visitor.data.TrackingData
  */
 @Composable
 fun TrackingMapScreen(
-    appointment: AppointmentDto,
+    destination: String,
     tracking: TrackingData?,
     trackingStarting: Boolean,
     locationPermissionMissing: Boolean,
@@ -59,6 +59,8 @@ fun TrackingMapScreen(
     onRequestLocationPermission: () -> Unit,
     onRefresh: () -> Unit,
     onWithdrawConsent: () -> Unit,
+    stops: List<AppointmentDto> = emptyList(),
+    currentStopId: Long? = null,
 ) {
     val active = tracking?.session?.active == true || trackingStarting
 
@@ -66,7 +68,7 @@ fun TrackingMapScreen(
         Column(modifier = outerModifier.fillMaxSize().background(AppBackground)) {
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 CampusMapPlaceholder(
-                    destination = appointment.office.name,
+                    destination = destination,
                     modifier = Modifier.fillMaxSize(),
                 )
 
@@ -83,9 +85,13 @@ fun TrackingMapScreen(
                     ) {
                         Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = IsatuBlue)
                         Column(Modifier.weight(1f)) {
-                            Text("Destination", style = MaterialTheme.typography.bodySmall, color = MutedInk)
                             Text(
-                                appointment.office.name,
+                                if (stops.isEmpty()) "Destination" else "Next stop",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MutedInk,
+                            )
+                            Text(
+                                destination,
                                 style = MaterialTheme.typography.titleMedium,
                                 maxLines = 1,
                             )
@@ -109,10 +115,18 @@ fun TrackingMapScreen(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text("Destination", color = MutedInk, style = MaterialTheme.typography.bodySmall)
-                            Text(appointment.office.name, style = MaterialTheme.typography.titleLarge, color = IsatuBlueDark)
+                            Text(
+                                if (stops.isEmpty()) "Destination" else "Next stop",
+                                color = MutedInk,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(destination, style = MaterialTheme.typography.titleLarge, color = IsatuBlueDark)
                         }
                         TrackingStatusBadge(active, locationPermissionMissing)
+                    }
+
+                    if (stops.isNotEmpty()) {
+                        StopProgress(stops, currentStopId)
                     }
 
                     if (locationPermissionMissing) {
@@ -146,6 +160,57 @@ fun TrackingMapScreen(
             }
         }
     }
+}
+
+/** Compact list of a multi-stop visit's offices with each stop's state. */
+@Composable
+private fun StopProgress(stops: List<AppointmentDto>, currentStopId: Long?) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        stops.forEachIndexed { index, stop ->
+            val current = stop.id == currentStopId
+            val done = stop.status in setOf("completed", "window_closed")
+            val inactive = stop.status in setOf("cancelled", "rejected", "unanswered")
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    Modifier.size(24.dp).background(
+                        when {
+                            current -> IsatuBlue
+                            done -> IsatuGreen
+                            else -> BorderSoft
+                        },
+                        CircleShape,
+                    ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "${index + 1}",
+                        color = if (current || done) Color.White else MutedInk,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stop.office.name,
+                        fontWeight = if (current) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (inactive) MutedInk else Ink,
+                    )
+                    Text(
+                        "${if (stop.visitType == "walk_in") "Walk-in" else formatTimeOfDay(stop.scheduledStartAt)} • " +
+                            stopProgressLabel(stop.status, current),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MutedInk,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun stopProgressLabel(status: String, current: Boolean): String = when {
+    current -> "Now"
+    status == "checked_in" -> "Up next"
+    status == "completed" -> "Done"
+    else -> statusLabel(status)
 }
 
 @Composable

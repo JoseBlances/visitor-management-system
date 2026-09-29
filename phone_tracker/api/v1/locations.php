@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . "/_bootstrap.php";
+require_once dirname(__DIR__, 2) . "/visit_service.php";
 
 api_require_method("POST");
 $user = api_require_visitor();
@@ -32,6 +33,16 @@ $stmt->close();
 if (!$session) {
     api_fail("Tracking session not found", 404);
 }
+// A multi-stop visit's session outlives the stop it is stored against.
+$window = visit_apply_tracking_window($conn, [
+    "id" => (int) $session["appointment_id"],
+    "status" => $session["status"],
+    "checked_in_at" => $session["checked_in_at"],
+    "completed_at" => $session["completed_at"],
+]);
+$session["status"] = $window["status"];
+$session["checked_in_at"] = $window["checked_in_at"];
+$session["completed_at"] = $window["completed_at"];
 $appointmentStatus = (string) $session["status"];
 $graceHours = api_setting($conn, "location_offline_upload_grace_hours", 24, 1, 168);
 $completedAt = $session["completed_at"] ? strtotime((string) $session["completed_at"]) : null;

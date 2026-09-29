@@ -74,11 +74,28 @@ class VisitorRepository(
         apiClient.requireData(apiClient.api.cancelAppointment(CancelAppointmentRequest(id, reason)))
     }
 
-    suspend fun respondToReschedule(proposalId: Long, action: String, slotId: Long?) {
+    suspend fun createVisit(visitType: String, stops: List<VisitStopRequest>): VisitDto =
         apiClient.requireData(
-            apiClient.api.respondToReschedule(RescheduleResponseRequest(proposalId, action, slotId)),
-        )
+            apiClient.api.createVisit(
+                CreateVisitRequest(
+                    visitType = visitType,
+                    stops = stops,
+                    deviceName = installationStore.deviceName,
+                    locationConsent = LocationConsentRequest(true, BuildConfig.CONSENT_VERSION),
+                ),
+            ),
+        ).visit
+
+    suspend fun visit(id: Long): VisitDto = apiClient.requireData(apiClient.api.visit(id)).visit
+
+    suspend fun cancelVisit(id: Long, reason: String) {
+        apiClient.requireData(apiClient.api.cancelVisit(CancelVisitRequest(id, reason)))
     }
+
+    suspend fun respondToReschedule(proposalId: Long, action: String, slotId: Long?): String? =
+        apiClient.api.respondToReschedule(RescheduleResponseRequest(proposalId, action, slotId))
+            .also { apiClient.requireData(it) }
+            .body()?.message
 
     suspend fun notifications(): NotificationsData = apiClient.requireData(apiClient.api.notifications())
 

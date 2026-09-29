@@ -34,6 +34,10 @@ JSON for this Android client file.
    - `phone_tracker/office_catalog_migration.sql`
    - `phone_tracker/app_users_profile_migration.sql`
    - `phone_tracker/mobile_api_migration.sql`
+   - `phone_tracker/multi_stop_visits_migration.sql`
+
+   An existing database only needs the files it is missing. Every migration can be run
+   again safely.
 6. Open `http://localhost/visitor-management-system/` and test the staff website.
 7. In Android Studio, open the `visitor_app` folder, not the repository root.
 8. Allow Android Studio to create `visitor_app/local.properties` and complete Gradle
@@ -127,6 +131,26 @@ release APK as a production application.
 8. Confirm Security sees the live marker and route updates.
 9. Disconnect the phone briefly, reconnect it, and confirm queued points upload.
 10. Complete the visit and confirm tracking stops and later uploads are rejected.
+
+### Multi-stop visit
+
+1. In **Book**, choose **Appointment**, turn on **Visiting more than one office?**, pick
+   today, and add two offices at least 10 minutes apart (for example CS, then Dean's
+   Office).
+2. Approve only the first stop from its Office account. Confirm the visit pass appears in
+   the app and lists only that stop.
+3. Scan the visit pass from Security. Confirm one row and one map marker appear, and the
+   app opens the campus map with the next stop.
+4. Approve the second stop from its Office account while the visitor is checked in.
+   Confirm it shows **Checked in** without another scan.
+5. From the first office, press **Mark meeting done**. Confirm the app moves to the next
+   stop and GPS keeps uploading.
+6. Press **End visit** in Security. Confirm both stops are completed and tracking stops.
+7. Choose **Walk-in**, turn on **Visiting more than one office?**, and list two offices.
+   Confirm the pass appears immediately and one scan checks in both offices.
+8. On another visit, have one office press **Suggest another time** with a single option.
+   Confirm the app offers **Accept suggested time** in one tap, and that **This time
+   doesn't work** opens Book with the office, purpose, and subject filled in.
 
 Record the phone model, Android version, tester, date, and any failed step. Do not use
 real visitor personal data during development testing.

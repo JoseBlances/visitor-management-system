@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . "/_bootstrap.php";
+require_once dirname(__DIR__, 2) . "/visit_service.php";
 
 api_require_method("GET", "POST");
 $user = api_require_visitor();
@@ -10,6 +11,8 @@ $appointmentId = (int) ($input["appointment_id"] ?? $_GET["appointment_id"] ?? 0
 if ($appointmentId <= 0) {
     api_fail("Select a valid appointment", 422);
 }
+// Every stop of a checked-in multi-stop visit shares the visit's single tracking session.
+$appointmentId = visit_tracking_appointment_id($conn, $appointmentId);
 $stmt = $conn->prepare(
     "SELECT id, status, checked_in_at, completed_at, scheduled_end_at
      FROM appointments WHERE id = ? AND visitor_user_id = ? LIMIT 1"
@@ -21,6 +24,7 @@ $stmt->close();
 if (!$appointment) {
     api_fail("Appointment not found", 404);
 }
+$appointment = visit_apply_tracking_window($conn, $appointment);
 if ($appointment["status"] === "completed") {
     $end = $conn->prepare(
         "UPDATE location_tracking_sessions SET ended_at = COALESCE(ended_at, ?), ended_reason = 'completed'

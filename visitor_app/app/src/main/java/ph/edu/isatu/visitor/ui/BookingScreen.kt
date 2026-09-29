@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CalendarMonth
@@ -33,6 +34,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -74,12 +77,39 @@ fun BookingScreen(state: VisitorUiState, viewModel: AppViewModel) {
     var subject by remember { mutableStateOf("") }
     var details by remember { mutableStateOf("") }
     var showDatePicker by remember { mutableStateOf(false) }
+    val multiStop = remember { MultiStopDraft() }
+    var multipleOffices by remember { mutableStateOf(false) }
+
+    // Rebooking after "None of these work": keep the request's details, pick a new time.
+    LaunchedEffect(state.bookingPrefill) {
+        state.bookingPrefill?.let { prefill ->
+            visitType = "appointment"
+            multipleOffices = false
+            officeCode = prefill.officeCode
+            purpose = prefill.purpose
+            subject = prefill.subject
+            details = prefill.details
+            date = ""
+            viewModel.consumeBookingPrefill()
+        }
+    }
 
     LaunchedEffect(visitType, officeCode, date) {
         selectedSlot = null
         viewModel.clearAvailability()
         if (visitType == "appointment" && officeCode.isNotBlank() && date.isNotBlank()) {
             viewModel.loadAvailability(officeCode, date)
+        }
+    }
+
+    LaunchedEffect(date) { multiStop.clearSlots() }
+    val multiStopOffices = multiStop.stops.map { it.officeCode }
+    LaunchedEffect(visitType, multipleOffices, date, multiStopOffices) {
+        if (visitType != "appointment" || !multipleOffices || date.isBlank()) return@LaunchedEffect
+        multiStopOffices.filter { it.isNotBlank() }.distinct().forEach { code ->
+            if (state.stopAvailability[stopAvailabilityKey(code, date)] == null) {
+                viewModel.loadStopAvailability(code, date)
+            }
         }
     }
 
@@ -111,20 +141,55 @@ fun BookingScreen(state: VisitorUiState, viewModel: AppViewModel) {
 
         item {
             Text("Visitor type", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                VisitTypeButton(
-                    text = "Walk-in",
-                    selected = visitType == "walk_in",
-                    onClick = { visitType = "walk_in" },
-                    modifier = Modifier.weight(1f),
-                )
-                VisitTypeButton(
-                    text = "Appointment",
-                    selected = visitType == "appointment",
-                    onClick = { visitType = "appointment" },
-                    modifier = Modifier.weight(1f),
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    VisitTypeButton(
+                        text = "Walk-in",
+                        selected = visitType == "walk_in",
+                        onClick = { visitType = "walk_in" },
+                        modifier = Modifier.weight(1f),
+                    )
+                    VisitTypeButton(
+                        text = "Appointment",
+                        selected = visitType == "appointment",
+                        onClick = { visitType = "appointment" },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().toggleable(
+                        value = multipleOffices,
+                        role = Role.Switch,
+                        onValueChange = { multipleOffices = it },
+                    ).padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Visiting more than one office?", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Add up to three offices and use one pass for the whole trip.",
+                            color = MutedInk,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Switch(checked = multipleOffices, onCheckedChange = null)
+                }
             }
+        }
+
+        if (multipleOffices) {
+            val walkIn = visitType == "walk_in"
+            multiStopBookingItems(
+                state = state,
+                draft = multiStop,
+                walkIn = walkIn,
+                date = date,
+                purposes = visitPurposes,
+                onPickDate = { showDatePicker = true },
+                onSubmit = { viewModel.createVisit(visitType, multiStop.toRequests(walkIn)) },
+            )
+            item { Spacer(Modifier.height(12.dp)) }
+            return@LazyColumn
         }
 
         item {
@@ -373,7 +438,7 @@ private fun VisitTypeButton(text: String, selected: Boolean, onClick: () -> Unit
 }
 
 @Composable
-private fun SelectionField(
+internal fun SelectionField(
     label: String,
     selectedText: String,
     placeholder: String,

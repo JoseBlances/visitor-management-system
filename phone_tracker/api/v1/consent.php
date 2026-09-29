@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . "/_bootstrap.php";
+require_once dirname(__DIR__, 2) . "/visit_service.php";
 
 api_require_method("GET", "POST");
 $user = api_require_visitor();
@@ -17,6 +18,10 @@ $appointment = $owned->get_result()->fetch_assoc();
 $owned->close();
 if (!$appointment) {
     api_fail("Appointment not found", 404);
+}
+if ($_SERVER["REQUEST_METHOD"] === "GET") {
+    // A checked-in multi-stop visit is tracked under the consent of one of its stops.
+    $appointmentId = visit_tracking_appointment_id($conn, $appointmentId);
 }
 
 if ($_SERVER["REQUEST_METHOD"] === "GET") {
@@ -79,20 +84,24 @@ if ($action === "grant") {
 
 $conn->begin_transaction();
 try {
+    // Withdrawing on any stop of a multi-stop visit withdraws it for the whole visit.
+    $withdrawn = 0;
     $withdraw = $conn->prepare(
         "UPDATE visitor_consents SET withdrawn_at = NOW()
          WHERE appointment_id = ? AND visitor_user_id = ? AND consent_type = 'location_tracking' AND withdrawn_at IS NULL"
     );
-    $withdraw->bind_param("ii", $appointmentId, $userId);
-    $withdraw->execute();
-    $withdrawn = $withdraw->affected_rows;
-    $withdraw->close();
     $end = $conn->prepare(
         "UPDATE location_tracking_sessions SET ended_at = COALESCE(ended_at, NOW()), ended_reason = 'consent_withdrawn'
          WHERE appointment_id = ? AND visitor_user_id = ? AND ended_at IS NULL"
     );
-    $end->bind_param("ii", $appointmentId, $userId);
-    $end->execute();
+    foreach (visit_consent_appointment_ids($conn, $appointmentId) as $consentAppointmentId) {
+        $withdraw->bind_param("ii", $consentAppointmentId, $userId);
+        $withdraw->execute();
+        $withdrawn += max(0, $withdraw->affected_rows);
+        $end->bind_param("ii", $consentAppointmentId, $userId);
+        $end->execute();
+    }
+    $withdraw->close();
     $end->close();
     api_audit($conn, $userId, "mobile.location_consent_withdrawn", "appointment", (string) $appointmentId, [], $appointmentId);
     $conn->commit();

@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__ . "/_bootstrap.php";
 require_once dirname(__DIR__, 2) . "/office_availability_service.php";
+require_once dirname(__DIR__, 2) . "/visit_service.php";
 
 api_require_method("POST");
 $user = api_require_visitor();
@@ -38,6 +39,8 @@ try {
     }
     $appointmentId = (int) $proposal["appointment_id"];
     $officeCode = (string) $proposal["office_code"];
+    $visit = null;
+    $leavesVisit = false;
     if ($action === "accept") {
         $slotStmt = $conn->prepare(
             "SELECT id, scheduled_start_at, scheduled_end_at
@@ -59,20 +62,47 @@ try {
         if (!$availability["available"]) {
             throw new DomainException($availability["message"] . " Ask the office for another schedule.");
         }
+        // A stop of a multi-stop visit must still fit around the visit's other stops.
+        // A time on another day takes the stop out of the visit; it then gets its own pass.
+        $visit = visit_for_appointment($conn, $appointmentId, true);
+        $leavesVisit = $visit && $start->format("Y-m-d") !== (string) $visit["visit_date"];
+        if ($visit && !$leavesVisit) {
+            $clash = visit_find_schedule_clash($conn, $visitorUserId, $start, $end, $appointmentId, (int) $visit["id"]);
+            if ($clash) {
+                throw new DomainException(
+                    "This time is too close to your " . appointment_office_label((string) $clash["office_code"])
+                    . " stop at " . date("g:i A", (int) strtotime((string) $clash["scheduled_start_at"]))
+                    . ". Choose another proposed time or decline."
+                );
+            }
+        }
+        $toStatus = $visit && !$leavesVisit && $visit["status"] === "checked_in" ? "checked_in" : "approved";
         $startSql = $start->format("Y-m-d H:i:s");
         $endSql = $end->format("Y-m-d H:i:s");
         $approvedBy = (int) $proposal["proposed_by_user_id"];
+        $leavesVisitFlag = $leavesVisit ? 1 : 0;
         $update = $conn->prepare(
             "UPDATE appointments SET appointment_at = ?, scheduled_start_at = ?, scheduled_end_at = ?,
-             status = 'approved', status_updated_at = NOW(), approved_at = NOW(), approved_by_user_id = ?,
-             qr_issued_at = NOW(), rejection_reason = '' WHERE id = ? AND status = 'reschedule_proposed'"
+             status = ?, status_updated_at = NOW(), approved_at = NOW(), approved_by_user_id = ?,
+             checked_in_at = IF(? = 'checked_in', NOW(), checked_in_at),
+             qr_issued_at = NOW(), rejection_reason = ''
+             WHERE id = ? AND status = 'reschedule_proposed'"
         );
-        $update->bind_param("sssii", $startSql, $startSql, $endSql, $approvedBy, $appointmentId);
+        $update->bind_param("ssssisi", $startSql, $startSql, $endSql, $toStatus, $approvedBy, $toStatus, $appointmentId);
         $update->execute();
         if ($update->affected_rows !== 1) {
             throw new RuntimeException("Appointment changed before the response was saved");
         }
         $update->close();
+        if ($visit) {
+            if ($leavesVisitFlag === 1) {
+                $detach = $conn->prepare("UPDATE appointments SET visit_id = NULL, stop_number = NULL WHERE id = ?");
+                $detach->bind_param("i", $appointmentId);
+                $detach->execute();
+                $detach->close();
+            }
+            visit_renumber_stops($conn, (int) $visit["id"]);
+        }
         $proposalUpdate = $conn->prepare("UPDATE appointment_reschedule_proposals SET status = 'accepted', responded_at = NOW() WHERE id = ?");
         $proposalUpdate->bind_param("i", $proposalId);
         $proposalUpdate->execute();
@@ -81,8 +111,8 @@ try {
         $selectSlot->bind_param("ii", $selectedSlotId, $proposalId);
         $selectSlot->execute();
         $selectSlot->close();
-        $toStatus = "approved";
-        $note = "Visitor accepted the proposed schedule for " . $start->format("M j, Y g:i A");
+        $note = "Visitor accepted the proposed schedule for " . $start->format("M j, Y g:i A")
+            . ($leavesVisit ? "; the stop moved to another day and left its multi-stop visit" : "");
         $officeTitle = "Proposed schedule accepted";
         $officeMessage = $proposal["visitor_full_name"] . " accepted " . $start->format("M j, Y g:i A") . ".";
     } else {
@@ -132,8 +162,20 @@ try {
     $conn->rollback();
     api_fail("Could not save the schedule response", 500);
 }
+if ($action !== "accept") {
+    $responseMessage = "Proposed schedules declined.";
+} elseif ($leavesVisit) {
+    $responseMessage = "Schedule accepted. This stop moved to another day, so it now has its own visitor pass.";
+} elseif ($visit) {
+    $responseMessage = $toStatus === "checked_in"
+        ? "Schedule accepted and added to your active campus visit."
+        : "Schedule accepted. It is now part of your visit pass.";
+} else {
+    $responseMessage = "Schedule accepted. Your QR pass is now available.";
+}
 api_success([
     "appointment_id" => $appointmentId,
     "status" => $toStatus,
-], 200, $action === "accept" ? "Schedule accepted. Your QR pass is now available." : "Proposed schedules declined.");
+    "left_visit" => $action === "accept" && $leavesVisit,
+], 200, $responseMessage);
 

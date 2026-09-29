@@ -74,7 +74,7 @@ try {
 
     $conn->begin_transaction();
     $lookup = $conn->prepare(
-        "SELECT id, visitor_user_id, visitor_full_name, status
+        "SELECT id, visitor_user_id, visitor_full_name, status, scheduled_start_at, visit_type
          FROM appointments WHERE id = ? AND office_code = ? FOR UPDATE"
     );
     $lookup->bind_param("is", $appointmentId, $officeCode);
@@ -84,8 +84,14 @@ try {
     if (!$appointment) {
         throw new RuntimeException("Appointment not found for this office");
     }
-    if ($appointment["status"] !== "pending_approval") {
-        throw new RuntimeException("Only pending appointment requests can be rescheduled");
+    // An approved appointment can also be moved when the office can no longer keep the
+    // agreed time. Its QR pass is withdrawn until the visitor accepts a new time.
+    $fromStatus = (string) $appointment["status"];
+    if ($appointment["visit_type"] === "walk_in") {
+        throw new RuntimeException("Walk-in passes cannot be rescheduled");
+    }
+    if (!in_array($fromStatus, ["pending_approval", "approved"], true)) {
+        throw new RuntimeException("Only pending or approved appointments can be rescheduled");
     }
 
     $deadlineSql = $deadline->format("Y-m-d H:i:s");
@@ -117,9 +123,9 @@ try {
 
     $update = $conn->prepare(
         "UPDATE appointments SET status = 'reschedule_proposed', status_updated_at = NOW()
-         WHERE id = ? AND status = 'pending_approval'"
+         WHERE id = ? AND status = ?"
     );
-    $update->bind_param("i", $appointmentId);
+    $update->bind_param("is", $appointmentId, $fromStatus);
     $update->execute();
     if ($update->affected_rows !== 1) {
         throw new RuntimeException("The appointment changed before the proposal was saved");
@@ -130,9 +136,9 @@ try {
     $history = $conn->prepare(
         "INSERT INTO appointment_status_history
          (appointment_id, from_status, to_status, changed_by_user_id, note)
-         VALUES (?, 'pending_approval', 'reschedule_proposed', ?, ?)"
+         VALUES (?, ?, 'reschedule_proposed', ?, ?)"
     );
-    $history->bind_param("iis", $appointmentId, $actorId, $historyNote);
+    $history->bind_param("isis", $appointmentId, $fromStatus, $actorId, $historyNote);
     $history->execute();
     $history->close();
 
@@ -140,14 +146,23 @@ try {
         return $slot[0]->format("M j, Y g:i A");
     }, $slots);
     $visitorUserId = (int) $appointment["visitor_user_id"];
-    $notificationMessage = "The office suggested: " . implode(", ", $slotLabels) . ". " . $message;
+    $suggestion = "The office suggested: " . implode(", ", $slotLabels) . ".";
+    if ($fromStatus === "approved") {
+        $originalTime = date("M j, Y g:i A", strtotime((string) $appointment["scheduled_start_at"]));
+        $notificationTitle = "Your appointment time needs to change";
+        $notificationMessage = "The office can no longer meet at {$originalTime}. {$suggestion}";
+    } else {
+        $notificationTitle = "Choose another appointment time";
+        $notificationMessage = $suggestion;
+    }
+    $notificationMessage = trim($notificationMessage . " " . $message);
     $dataJson = json_encode(["proposal_id" => $proposalId, "response_deadline" => $deadlineSql]);
     $notification = $conn->prepare(
         "INSERT INTO app_notifications
          (recipient_user_id, appointment_id, notification_type, title, message, data_json)
-         VALUES (?, ?, 'appointment.reschedule_proposed', 'Choose another appointment time', ?, ?)"
+         VALUES (?, ?, 'appointment.reschedule_proposed', ?, ?, ?)"
     );
-    $notification->bind_param("iiss", $visitorUserId, $appointmentId, $notificationMessage, $dataJson);
+    $notification->bind_param("iisss", $visitorUserId, $appointmentId, $notificationTitle, $notificationMessage, $dataJson);
     $notification->execute();
     $notification->close();
 

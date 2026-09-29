@@ -9,6 +9,7 @@ require_once __DIR__ . "/appointment_maintenance.php";
 require_roles_json(["offices", "admin"]);
 refresh_appointment_time_states($conn);
 
+$visitColumns = visit_list_columns($conn, "a");
 $sql =
     "SELECT a.id, a.registration_code, a.public_token, a.office_code,
             a.visitor_full_name, a.visitor_email, a.contact_number, a.device_name,
@@ -30,7 +31,7 @@ $sql =
                 WHEN a.status = 'completed' THEN a.completed_at
                 WHEN a.status = 'cancelled' THEN a.cancelled_at
                 ELSE a.status_updated_at
-            END AS processed_at
+            END AS processed_at{$visitColumns}
      FROM appointments a
      LEFT JOIN app_users u ON u.id = a.visitor_user_id
      LEFT JOIN app_users approved_user ON approved_user.id = a.approved_by_user_id
@@ -68,6 +69,9 @@ while ($row = $result->fetch_assoc()) {
     $code = (string) $row["office_code"];
     $row["id"] = (int) $row["id"];
     $row["office_label"] = $map[$code] ?? $code;
+    $row["visit_id"] = $row["visit_id"] !== null ? (int) $row["visit_id"] : null;
+    $row["stop_number"] = $row["stop_number"] !== null ? (int) $row["stop_number"] : null;
+    $row["visit_stop_count"] = $row["visit_stop_count"] !== null ? (int) $row["visit_stop_count"] : null;
     $rows[] = $row;
 }
 $stmt->close();

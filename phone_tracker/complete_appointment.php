@@ -2,6 +2,7 @@
 header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/visit_service.php";
 
 if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     http_response_code(405);
@@ -21,6 +22,33 @@ $appointmentId = (int) $input["id"];
 $securityUserId = (int) $_SESSION["user_id"];
 if ($appointmentId <= 0) {
     echo json_encode(["success" => false, "message" => "Invalid appointment"]);
+    exit;
+}
+
+// Ending any stop of a multi-stop visit is a gate checkout for the whole visit.
+$visit = visit_for_appointment($conn, $appointmentId);
+if ($visit) {
+    $conn->begin_transaction();
+    try {
+        $locked = visit_load($conn, (int) $visit["id"], true);
+        if (!$locked || $locked["status"] !== "checked_in") {
+            throw new DomainException("Visit is not active or already completed");
+        }
+        visit_complete($conn, $locked, $securityUserId, "Visit ended by security", null, true);
+        $conn->commit();
+    } catch (DomainException $error) {
+        $conn->rollback();
+        $conn->close();
+        echo json_encode(["success" => false, "message" => $error->getMessage()]);
+        exit;
+    } catch (Throwable $error) {
+        $conn->rollback();
+        $conn->close();
+        echo json_encode(["success" => false, "message" => "Could not end the visit"]);
+        exit;
+    }
+    $conn->close();
+    echo json_encode(["success" => true, "message" => "Visit marked as complete"]);
     exit;
 }
 

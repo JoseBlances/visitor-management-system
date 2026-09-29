@@ -2,6 +2,7 @@
 header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/visit_service.php";
 
 if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     http_response_code(405);
@@ -84,6 +85,19 @@ try {
         $history->bind_param("ii", $appointmentId, $authorizedBy);
         $history->execute();
         $history->close();
+
+        // A multi-stop visit closes once none of its stops can be attended; reopening a
+        // stop reopens the visit so its pass can be scanned.
+        if (visit_schema_ready($conn)) {
+            $reopenVisit = $conn->prepare(
+                "UPDATE visits v INNER JOIN appointments a ON a.visit_id = v.id
+                 SET v.status = 'open', v.closed_at = NULL
+                 WHERE a.id = ? AND v.status = 'closed'"
+            );
+            $reopenVisit->bind_param("i", $appointmentId);
+            $reopenVisit->execute();
+            $reopenVisit->close();
+        }
     }
 
     $audit = $conn->prepare(

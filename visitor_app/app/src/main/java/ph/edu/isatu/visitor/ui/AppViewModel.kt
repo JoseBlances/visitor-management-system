@@ -25,7 +25,17 @@ import ph.edu.isatu.visitor.data.NotificationDto
 import ph.edu.isatu.visitor.data.OfficeDto
 import ph.edu.isatu.visitor.data.TrackingData
 import ph.edu.isatu.visitor.data.UserDto
+import ph.edu.isatu.visitor.data.VisitDto
+import ph.edu.isatu.visitor.data.VisitStopRequest
 import ph.edu.isatu.visitor.data.VisitorRepository
+
+/** Details carried into the booking form when the visitor rebooks a declined proposal. */
+data class BookingPrefill(
+    val officeCode: String,
+    val purpose: String,
+    val subject: String,
+    val details: String,
+)
 
 data class VisitorUiState(
     val signedIn: Boolean = false,
@@ -37,11 +47,17 @@ data class VisitorUiState(
     val notifications: List<NotificationDto> = emptyList(),
     val unreadCount: Int = 0,
     val selectedAppointment: AppointmentDto? = null,
+    val selectedVisit: VisitDto? = null,
     val availability: AvailabilityData? = null,
+    /** Availability for multi-stop booking, keyed by [stopAvailabilityKey]. */
+    val stopAvailability: Map<String, AvailabilityData> = emptyMap(),
+    val bookingPrefill: BookingPrefill? = null,
     val tracking: TrackingData? = null,
     val error: String? = null,
     val message: String? = null,
 )
+
+fun stopAvailabilityKey(officeCode: String, date: String): String = "$officeCode|$date"
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: VisitorRepository = (application as VisitorApplication).repository
@@ -166,13 +182,75 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openAppointment(id: Long) = launchTask {
         val appointment = repository.appointment(id)
+        val visit = appointment.visit
+        // A checked-in stop is part of an active campus visit; show the visit's map.
+        if (visit != null && appointment.status == "checked_in") {
+            loadVisit(visit.id)
+            return@launchTask
+        }
         val tracking = if (appointment.status == "checked_in") {
             runCatching { repository.tracking(id) }.getOrNull()
         } else null
         _state.update { it.copy(selectedAppointment = appointment, tracking = tracking) }
     }
 
-    fun closeAppointment() = _state.update { it.copy(selectedAppointment = null, tracking = null) }
+    fun closeAppointment() = _state.update {
+        it.copy(selectedAppointment = null, tracking = if (it.selectedVisit != null) it.tracking else null)
+    }
+
+    fun openVisit(id: Long) = launchTask { loadVisit(id) }
+
+    fun closeVisit() = _state.update { it.copy(selectedVisit = null, selectedAppointment = null, tracking = null) }
+
+    fun pollSelectedVisit(id: Long) {
+        viewModelScope.launch {
+            if (_state.value.selectedVisit?.id != id) return@launch
+            val visit = runCatching { repository.visit(id) }.getOrNull() ?: return@launch
+            val tracking = visitTracking(visit)
+            if (_state.value.selectedVisit?.id != id) return@launch
+            _state.update { it.copy(selectedVisit = visit, tracking = tracking) }
+        }
+    }
+
+    private suspend fun loadVisit(id: Long) {
+        val visit = repository.visit(id)
+        val tracking = visitTracking(visit)
+        _state.update { it.copy(selectedVisit = visit, selectedAppointment = null, tracking = tracking) }
+    }
+
+    private suspend fun visitTracking(visit: VisitDto): TrackingData? {
+        val trackingId = visit.trackingAppointmentId
+        return if (visit.status == "checked_in" && trackingId != null) {
+            runCatching { repository.tracking(trackingId) }.getOrNull()
+        } else null
+    }
+
+    fun loadStopAvailability(officeCode: String, date: String) = launchTask(showBusy = false) {
+        val result = repository.availability(officeCode, date)
+        _state.update { it.copy(stopAvailability = it.stopAvailability + (stopAvailabilityKey(officeCode, date) to result)) }
+    }
+
+    fun createVisit(visitType: String, stops: List<VisitStopRequest>) = launchTask {
+        val visit = repository.createVisit(visitType, stops)
+        _state.update {
+            it.copy(
+                selectedVisit = visit,
+                stopAvailability = emptyMap(),
+                message = if (visitType == "walk_in") {
+                    "Walk-in pass ready for every office. Present it to Security with a valid ID."
+                } else {
+                    "Visit submitted. Each office reviews its own stop; your pass appears after the first approval."
+                },
+            )
+        }
+        refreshAppointments()
+    }
+
+    fun cancelVisit(id: Long, reason: String) = launchTask {
+        repository.cancelVisit(id, reason.trim())
+        _state.update { it.copy(message = "Visit cancelled.", selectedVisit = null, selectedAppointment = null) }
+        refreshAppointments()
+    }
 
     fun refreshSelectedAppointment() {
         _state.value.selectedAppointment?.id?.let(::openAppointment)
@@ -205,17 +283,39 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         refreshAppointments()
     }
 
-    fun respondToReschedule(proposalId: Long, action: String, slotId: Long?) = launchTask {
-        repository.respondToReschedule(proposalId, action, slotId)
+    fun acceptProposedTime(proposalId: Long, slotId: Long) = launchTask {
+        val message = repository.respondToReschedule(proposalId, "accept", slotId)
+        _state.update {
+            it.copy(message = message ?: "Schedule accepted. Your visitor pass is ready.", selectedAppointment = null)
+        }
+        refreshAppointments()
+        _state.value.selectedVisit?.id?.let(::pollSelectedVisit)
+    }
+
+    /**
+     * Declines every proposed time and opens the booking form with this request's office,
+     * purpose, and subject already filled in, so the visitor only picks a new time.
+     */
+    fun declineAndRebook(proposalId: Long, appointment: AppointmentDto) = launchTask {
+        repository.respondToReschedule(proposalId, "decline", null)
         _state.update {
             it.copy(
-                message = if (action == "accept") "Schedule accepted. Your visitor pass is ready."
-                else "Proposed schedules declined.",
+                message = "Proposed times declined. Pick a new time below.",
                 selectedAppointment = null,
+                selectedVisit = null,
+                tracking = null,
+                bookingPrefill = BookingPrefill(
+                    officeCode = appointment.office.code,
+                    purpose = appointment.purpose,
+                    subject = appointment.subject,
+                    details = appointment.additionalDetails,
+                ),
             )
         }
         refreshAppointments()
     }
+
+    fun consumeBookingPrefill() = _state.update { it.copy(bookingPrefill = null) }
 
     fun refreshTracking(id: Long) = launchTask {
         _state.update { it.copy(tracking = repository.tracking(id)) }
@@ -224,7 +324,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun withdrawConsent(id: Long) = launchTask {
         repository.withdrawConsent(id)
         _state.update { it.copy(message = "Location consent withdrawn and sharing stopped.") }
-        openAppointment(id)
+        val visitId = _state.value.selectedVisit?.id
+        if (visitId != null) loadVisit(visitId) else openAppointment(id)
+    }
+
+    /**
+     * Quietly reloads notifications. When a new one has arrived, the visit list is reloaded
+     * too, because a notification means an office or Security changed a visit.
+     */
+    fun refreshNotifications() {
+        viewModelScope.launch {
+            if (!_state.value.signedIn) return@launch
+            val data = runCatching { repository.notifications() }.getOrNull() ?: return@launch
+            val previousNewest = _state.value.notifications.maxOfOrNull { it.id } ?: 0L
+            _state.update { it.copy(notifications = data.notifications, unreadCount = data.unreadCount) }
+            if ((data.notifications.maxOfOrNull { it.id } ?: 0L) > previousNewest) refreshAppointments()
+        }
     }
 
     fun markNotificationRead(id: Long) = launchTask(showBusy = false) {

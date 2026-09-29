@@ -2,6 +2,7 @@
 header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/visit_service.php";
 
 require_roles_json(["offices"]);
 $appointmentId = isset($_GET["id"]) ? (int) $_GET["id"] : 0;
@@ -11,13 +12,14 @@ if ($appointmentId <= 0 || $officeCode === "") {
     exit;
 }
 
+$visitColumns = visit_appointment_columns($conn, "a");
 $stmt = $conn->prepare(
     "SELECT a.id, a.registration_code, a.visitor_full_name, a.visitor_email,
             a.contact_number, a.visit_type, a.purpose, a.destination, a.subject,
             a.additional_details, a.scheduled_start_at, a.scheduled_end_at,
             a.status, a.rejection_reason, a.created_at, a.status_updated_at,
             a.approved_at, a.rejected_at, a.checked_in_at, a.completed_at,
-            COALESCE(NULLIF(processor.display_name, ''), processor.username, '') AS processed_by
+            COALESCE(NULLIF(processor.display_name, ''), processor.username, '') AS processed_by{$visitColumns}
      FROM appointments a
      LEFT JOIN app_users processor ON processor.id = COALESCE(
          a.approved_by_user_id, a.rejected_by_user_id, a.completed_by_user_id, a.cancelled_by_user_id
@@ -39,6 +41,33 @@ if (!$appointment) {
     exit;
 }
 $appointment["id"] = (int) $appointment["id"];
+
+// For a stop of a multi-stop visit, other offices' stops are shown only as busy times,
+// so this office can suggest a time that fits without seeing the other requests.
+$visitContext = null;
+if (!empty($appointment["visit_id"])) {
+    $visit = visit_load($conn, (int) $appointment["visit_id"]);
+    if ($visit) {
+        $stops = visit_stops($conn, (int) $visit["id"]);
+        $otherStopTimes = [];
+        foreach ($stops as $stop) {
+            if ((int) $stop["id"] !== $appointmentId && in_array($stop["status"], VISIT_ACTIVE_STOP_STATUSES, true)) {
+                $otherStopTimes[] = [
+                    "scheduled_start_at" => $stop["scheduled_start_at"],
+                    "scheduled_end_at" => $stop["scheduled_end_at"],
+                ];
+            }
+        }
+        $visitContext = [
+            "visit_code" => $visit["visit_code"],
+            "visit_date" => $visit["visit_date"],
+            "status" => $visit["status"],
+            "stop_number" => (int) $appointment["stop_number"],
+            "stop_count" => count($stops),
+            "other_stop_times" => $otherStopTimes,
+        ];
+    }
+}
 
 $history = [];
 $historyStmt = $conn->prepare(
@@ -97,5 +126,6 @@ echo json_encode([
     "appointment" => $appointment,
     "history" => $history,
     "reschedule_proposal" => $proposal,
+    "visit" => $visitContext,
 ]);
 

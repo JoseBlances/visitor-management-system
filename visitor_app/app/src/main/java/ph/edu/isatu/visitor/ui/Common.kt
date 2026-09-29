@@ -125,6 +125,32 @@ fun StatusPill(status: String) {
     }
 }
 
+/** "9:00 AM" from a server "yyyy-MM-dd HH:mm:ss" value. */
+fun formatTimeOfDay(value: String): String = runCatching {
+    val source = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+    val target = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US)
+    target.format(requireNotNull(source.parse(value)))
+}.getOrDefault(value)
+
+/** "9:00 AM – 9:30 AM (30 min)" for a slot on one day. */
+fun formatTimeSpan(start: String, end: String): String {
+    val source = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+    val minutes = runCatching {
+        (requireNotNull(source.parse(end)).time - requireNotNull(source.parse(start)).time) / 60_000
+    }.getOrNull()
+    val range = "${formatTimeOfDay(start)} – ${formatTimeOfDay(end)}"
+    return if (minutes != null && minutes > 0) "$range ($minutes min)" else range
+}
+
+/** Label for a multi-stop visit's own status. */
+fun visitStatusLabel(status: String): String = when (status) {
+    "open" -> "Upcoming"
+    "checked_in" -> "On campus"
+    "completed" -> "Visit done"
+    "closed" -> "Closed"
+    else -> status.replace('_', ' ').replaceFirstChar { it.uppercase() }
+}
+
 fun statusLabel(status: String): String = when (status) {
     "pending_approval" -> "Pending approval"
     "reschedule_proposed" -> "New schedule offered"

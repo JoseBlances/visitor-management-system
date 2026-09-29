@@ -16,6 +16,7 @@
         profileImageVersion: 0,
         profilePreviewUrl: "",
         selectedAppointmentId: 0,
+        selectedVisit: null,
         recentQuery: "",
         recentStatus: "",
         recentPage: 1,
@@ -253,10 +254,29 @@
         row.appendChild(cell);
     }
 
+    function visitStopLabel(item) {
+        return item.visit_id && item.stop_number && item.visit_stop_count
+            ? "Stop " + item.stop_number + " of " + item.visit_stop_count
+            : "";
+    }
+
+    function formatTimeOnly(value) {
+        const date = parseServerDate(value);
+        return date ? new Intl.DateTimeFormat("en-PH", { hour: "numeric", minute: "2-digit" }).format(date) : "—";
+    }
+
+    function otherStopTimesText(visit) {
+        return (visit.other_stop_times || []).map(function (stop) {
+            return formatTimeOnly(stop.scheduled_start_at) + "–" + formatTimeOnly(stop.scheduled_end_at);
+        }).join(", ");
+    }
+
     function makeAppointmentRow(item, kind) {
         const row = document.createElement("tr");
         const schedule = formatSchedule(item);
-        appendTextCell(row, item.visitor_full_name, item.registration_code || item.visitor_email || "");
+        const reference = item.registration_code || item.visitor_email || "";
+        const stopLabel = visitStopLabel(item);
+        appendTextCell(row, item.visitor_full_name, stopLabel ? reference + " · " + stopLabel : reference);
         appendTextCell(row, purposeLabel(item), item.subject && item.subject !== item.purpose ? item.subject : (item.destination || ""));
         appendTextCell(row, schedule.date, schedule.time);
         if (kind === "requests") {
@@ -538,16 +558,38 @@
         if (appointment.rejection_reason) {
             details.appendChild(detailPair("Decision reason", appointment.rejection_reason, true));
         }
+        state.selectedVisit = data.visit || null;
+        if (data.visit) {
+            const otherTimes = otherStopTimesText(data.visit);
+            details.appendChild(detailPair(
+                "Multi-stop visit",
+                "Stop " + data.visit.stop_number + " of " + data.visit.stop_count + " · " + data.visit.visit_code
+                    + (otherTimes ? " · Visitor's other stops that day: " + otherTimes : ""),
+                true
+            ));
+        }
         renderProposal(data.reschedule_proposal);
         renderAppointmentHistory(data.history || []);
-        byId("officeAppointmentActions").hidden = appointment.status !== "pending_approval";
+        // Pending: decide or suggest. Approved: the office can still move the time.
+        // Checked-in stop of a multi-stop visit: the office marks its meeting done.
+        // Walk-in passes are issued immediately and cannot be moved to another time.
+        const isPending = appointment.status === "pending_approval";
+        const canReschedule = isPending || (appointment.status === "approved" && appointment.visit_type !== "walk_in");
+        const canComplete = appointment.status === "checked_in" && Boolean(data.visit);
+        byId("openDeclineAppointmentBtn").hidden = !isPending;
+        byId("approveOfficeAppointmentBtn").hidden = !isPending;
+        byId("openRescheduleAppointmentBtn").hidden = !canReschedule;
+        byId("completeOfficeStopBtn").hidden = !canComplete;
+        byId("officeAppointmentActions").hidden = !(canReschedule || canComplete);
         byId("officeAppointmentDialog").showModal();
     }
 
     async function processAppointment(action, reason) {
         showError("officeAppointmentError", "");
         const approveButton = byId("approveOfficeAppointmentBtn");
+        const completeButton = byId("completeOfficeStopBtn");
         approveButton.disabled = true;
+        completeButton.disabled = true;
         try {
             const data = await postJson("office_appointment_action.php", {
                 appointment_id: state.selectedAppointmentId,
@@ -567,6 +609,7 @@
             showError(target, error.message || "Could not reach the server.");
         } finally {
             approveButton.disabled = false;
+            completeButton.disabled = false;
             byId("confirmOfficeDeclineBtn").disabled = false;
         }
     }
@@ -798,10 +841,25 @@
         processAppointment("reject", reason);
     });
 
+    byId("completeOfficeStopBtn").addEventListener("click", function () {
+        if (window.confirm("Mark this meeting as done? The visitor's campus visit continues until Security checks them out.")) {
+            processAppointment("complete", "");
+        }
+    });
+
     byId("openRescheduleAppointmentBtn").addEventListener("click", function () {
         byId("officeRescheduleForm").reset();
         setFutureMinimums();
         showError("officeRescheduleError", "");
+        const hint = byId("officeRescheduleVisitHint");
+        const visit = state.selectedVisit;
+        const otherTimes = visit ? otherStopTimesText(visit) : "";
+        hint.textContent = visit
+            ? "This request is part of a multi-stop visit"
+                + (otherTimes ? " with other stops at " + otherTimes : "")
+                + ". Offer times on the same day that leave 10 minutes before and after those stops. A time on another day moves this request out of the visit."
+            : "";
+        hint.hidden = !visit;
         byId("officeRescheduleDialog").showModal();
     });
     byId("closeOfficeRescheduleBtn").addEventListener("click", function () { byId("officeRescheduleDialog").close(); });

@@ -205,6 +205,7 @@
                 <button class="office-danger-button" id="openDeclineAppointmentBtn" type="button">Decline</button>
                 <button class="office-secondary-button" id="openRescheduleAppointmentBtn" type="button">Suggest another time</button>
                 <button class="office-success-button" id="approveOfficeAppointmentBtn" type="button">Approve appointment</button>
+                <button class="office-success-button" id="completeOfficeStopBtn" type="button" hidden>Mark meeting done</button>
             </footer>
         </div>
     </dialog>
@@ -223,6 +224,7 @@
         <form id="officeRescheduleForm">
             <header class="admin-dialog-header"><div><p class="admin-eyebrow">Reduce repeat requests</p><h2>Suggest another schedule</h2></div><button class="admin-dialog-close" id="closeOfficeRescheduleBtn" type="button" aria-label="Close">×</button></header>
             <p class="office-dialog-help">Offer up to three times the office can actually accommodate. The visitor can choose one or decline all of them.</p>
+            <p class="office-dialog-help" id="officeRescheduleVisitHint" hidden></p>
             <div class="office-form-grid">
                 <label class="office-field office-full-field"><span>Reason for changing the schedule</span><input id="officeRescheduleReason" maxlength="255" required placeholder="Example: Personnel unavailable at the requested time"></label>
                 <label class="office-field office-full-field"><span>Optional note to the visitor</span><textarea id="officeRescheduleMessage" rows="2" maxlength="1000" placeholder="Add instructions or helpful context"></textarea></label>
@@ -279,6 +281,6 @@
 
     <div class="office-toast" id="officeToast" role="status" aria-live="polite" hidden></div>
     <script src="auth.js?v=20260918-2"></script>
-    <script src="offices.js?v=20260921-2"></script>
+    <script src="offices.js?v=20260929-2"></script>
 </body>
 </html>

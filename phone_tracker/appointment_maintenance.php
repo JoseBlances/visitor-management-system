@@ -1,13 +1,22 @@
 <?php
 
+require_once __DIR__ . "/visit_service.php";
+
 /**
- * Applies time-based appointment outcomes. This is safe to call from read APIs;
- * each update includes the previous status so an appointment is changed once.
+ * Applies time-based appointment and multi-stop visit outcomes. This is safe to call
+ * from read APIs; each update includes the previous status so a record changes once.
  */
 function refresh_appointment_time_states(mysqli $conn): void
 {
+    refresh_appointment_stop_time_states($conn);
+    refresh_visit_states($conn);
+}
+
+function refresh_appointment_stop_time_states(mysqli $conn): void
+{
+    $visitColumns = visit_appointment_columns($conn);
     $result = $conn->query(
-        "SELECT id, visitor_user_id, status, scheduled_end_at
+        "SELECT id, visitor_user_id, status, scheduled_end_at{$visitColumns}
          FROM appointments
          WHERE scheduled_end_at < NOW()
            AND status IN ('pending_approval', 'approved', 'checked_in')
@@ -22,6 +31,7 @@ function refresh_appointment_time_states(mysqli $conn): void
         $appointmentId = (int) $appointment["id"];
         $visitorUserId = (int) $appointment["visitor_user_id"];
         $fromStatus = (string) $appointment["status"];
+        $isVisitStop = !empty($appointment["visit_id"]);
         $toStatus = "";
         $note = "";
         $extraSet = "";
@@ -36,7 +46,9 @@ function refresh_appointment_time_states(mysqli $conn): void
             $extraSet = ", window_closed_at = NOW()";
         } elseif ($fromStatus === "checked_in") {
             $toStatus = "completed";
-            $note = "Visit automatically completed at its scheduled end";
+            $note = $isVisitStop
+                ? "Office stop automatically completed at its scheduled end"
+                : "Visit automatically completed at its scheduled end";
             $extraSet = ", completed_at = scheduled_end_at, completed_by_user_id = NULL";
         }
 
@@ -59,7 +71,10 @@ function refresh_appointment_time_states(mysqli $conn): void
             continue;
         }
 
-        if ($toStatus === "completed") {
+        // A multi-stop visit keeps tracking after the stop that owns its session ends;
+        // refresh_visit_states() ends the session when the whole visit ends.
+        $visitTracking = $toStatus === "completed" ? visit_for_tracking_appointment($conn, $appointmentId) : null;
+        if ($toStatus === "completed" && !($visitTracking && $visitTracking["status"] === "checked_in")) {
             $tracking = false;
             try {
                 $tracking = $conn->prepare(
@@ -97,7 +112,7 @@ function refresh_appointment_time_states(mysqli $conn): void
         if ($notification) {
             $title = $toStatus === "unanswered"
                 ? "Office did not respond"
-                : ($toStatus === "window_closed" ? "Appointment Done" : "Visit completed");
+                : ($toStatus === "window_closed" ? "Appointment Done" : ($isVisitStop ? "Office stop completed" : "Visit completed"));
             $notificationType = "appointment." . $toStatus;
             $notification->bind_param("iisss", $visitorUserId, $appointmentId, $notificationType, $title, $note);
             $notification->execute();

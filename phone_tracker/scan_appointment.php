@@ -3,6 +3,7 @@ header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_offices.php";
+require_once __DIR__ . "/visit_service.php";
 
 if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     http_response_code(405);
@@ -24,9 +25,10 @@ if (strlen($token) !== 64) {
 }
 
 $securityUserId = (int) $_SESSION["user_id"];
+$visitColumns = visit_appointment_columns($conn);
 $stmt = $conn->prepare(
     "SELECT id, registration_code, status, visitor_full_name, device_name, office_code, visit_type,
-            scheduled_start_at, scheduled_end_at, checked_in_at, completed_at
+            scheduled_start_at, scheduled_end_at, checked_in_at, completed_at{$visitColumns}
      FROM appointments WHERE public_token = ? LIMIT 1"
 );
 if (!$stmt) {
@@ -37,6 +39,22 @@ $stmt->bind_param("s", $token);
 $stmt->execute();
 $appt = $stmt->get_result()->fetch_assoc();
 $stmt->close();
+
+// A multi-stop visit pass checks in every approved stop at once. A stop's own token
+// is never shown to the visitor, but it is handled as the visit if presented.
+$visitId = 0;
+if ($appt && !empty($appt["visit_id"])) {
+    $visitId = (int) $appt["visit_id"];
+} elseif (!$appt && visit_schema_ready($conn)) {
+    $visit = visit_load_by_token($conn, $token);
+    $visitId = $visit ? (int) $visit["id"] : 0;
+}
+if ($visitId > 0) {
+    $response = visit_handle_scan($conn, $visitId, $securityUserId);
+    $conn->close();
+    echo json_encode($response);
+    exit;
+}
 
 if (!$appt) {
     $conn->close();

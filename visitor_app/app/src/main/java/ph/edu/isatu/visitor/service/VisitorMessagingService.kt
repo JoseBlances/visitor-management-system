@@ -31,10 +31,11 @@ class VisitorMessagingService : FirebaseMessagingService() {
         val title = message.notification?.title ?: message.data["title"] ?: "Appointment update"
         val body = message.notification?.body ?: message.data["message"] ?: "Open the app to see the latest update."
         val appointmentId = message.data["appointment_id"]?.toLongOrNull() ?: 0L
-        showNotification(title, body, appointmentId)
+        val visitId = message.data["visit_id"]?.toLongOrNull() ?: 0L
+        showNotification(title, body, appointmentId, visitId)
     }
 
-    private fun showNotification(title: String, body: String, appointmentId: Long) {
+    private fun showNotification(title: String, body: String, appointmentId: Long, visitId: Long) {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(
@@ -46,6 +47,7 @@ class VisitorMessagingService : FirebaseMessagingService() {
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             if (appointmentId > 0) putExtra("appointment_id", appointmentId)
+            if (visitId > 0) putExtra("visit_id", visitId)
         }
         val pendingIntent = PendingIntent.getActivity(
             this,

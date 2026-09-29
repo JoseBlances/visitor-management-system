@@ -149,6 +149,7 @@ paths:
   /appointment.php:
     get:
       summary: Read appointment details, proposal, and eligible QR pass
+      description: A stop of a multi-stop visit includes a VisitSummary in visit and no qr_pass; use visit.php for its pass.
       parameters:
         - in: query
           name: id
@@ -176,6 +177,11 @@ paths:
   /reschedule_response.php:
     post:
       summary: Accept or decline an Office schedule proposal
+      description: >
+        For a stop of a multi-stop visit, an accepted time must leave 10 minutes around the
+        visit's other stops (409 otherwise). A time on a different day moves the stop out of
+        the visit; the response then has left_visit true and the stop gets its own QR pass.
+        A stop accepted while its visit is checked in becomes checked_in.
       requestBody:
         required: true
         content:
@@ -189,6 +195,52 @@ paths:
                 selected_slot_id: { type: integer, minimum: 1, nullable: true }
       responses:
         "200": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Error" }
+  /visits.php:
+    post:
+      summary: Book a multi-stop visit (two or three offices on one day)
+      description: >
+        Every stop is checked against its office's availability, stops must be at least
+        10 minutes apart, and they must not clash with the visitor's other bookings. All
+        stops are created together or not at all. Each stop is an appointment that its own
+        office approves; the visit has one QR pass covering every approved stop.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VisitRequest" }
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /visit.php:
+    get:
+      summary: Read a multi-stop visit with its stops, pass, and tracking stop
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+  /visit_cancel.php:
+    post:
+      summary: Cancel every stop of a visit that has not been checked in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [visit_id]
+              properties:
+                visit_id: { type: integer, minimum: 1 }
+                reason: { type: string, maxLength: 500 }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
   /notifications.php:
     get:
@@ -396,6 +448,73 @@ components:
           properties:
             granted: { type: boolean, enum: [true] }
             version: { type: string, maxLength: 32 }
+    VisitStop:
+      type: object
+      required: [office_code, purpose, subject]
+      properties:
+        office_code: { $ref: "#/components/schemas/OfficeCode" }
+        purpose: { type: string, maxLength: 100 }
+        subject: { type: string, maxLength: 150 }
+        additional_details: { type: string, maxLength: 3000 }
+        scheduled_start_at: { type: string, description: Required for appointment visits; ignored for walk-ins, example: "2026-10-02 09:00:00" }
+        scheduled_end_at: { type: string, description: Optional; defaults to the office slot length, example: "2026-10-02 09:30:00" }
+    VisitRequest:
+      type: object
+      required: [stops, location_consent]
+      properties:
+        visit_type:
+          type: string
+          enum: [appointment, walk_in]
+          default: appointment
+          description: >
+            walk_in creates an approved pass at once for offices accepting visitors; stop
+            times are ignored and the chosen order is kept. appointment requires a slot per stop.
+        stops:
+          type: array
+          minItems: 2
+          maxItems: 3
+          description: Different offices on the same day
+          items: { $ref: "#/components/schemas/VisitStop" }
+        device_name: { type: string, maxLength: 100 }
+        location_consent:
+          type: object
+          required: [granted, version]
+          properties:
+            granted: { type: boolean, enum: [true] }
+            version: { type: string, maxLength: 32 }
+    VisitStatus:
+      type: string
+      description: >
+        open = booked, not yet at the gate; checked_in = on campus; completed = checked out
+        or past the last stop; closed = no stop can be attended (declined, cancelled, expired).
+      enum: [open, checked_in, completed, closed]
+    VisitSummary:
+      type: object
+      description: Present on an appointment that is a stop of a multi-stop visit; null otherwise. Such stops never carry their own qr_pass.
+      nullable: true
+      properties:
+        id: { type: integer }
+        visit_code: { type: string, example: MV-2026-000007 }
+        visit_date: { type: string, example: "2026-10-02" }
+        status: { $ref: "#/components/schemas/VisitStatus" }
+        stop_number: { type: integer }
+        stop_count: { type: integer }
+    Visit:
+      type: object
+      properties:
+        id: { type: integer }
+        visit_code: { type: string }
+        visit_date: { type: string }
+        status: { $ref: "#/components/schemas/VisitStatus" }
+        checked_in_at: { type: string, nullable: true }
+        completed_at: { type: string, nullable: true }
+        tracking_appointment_id: { type: integer, nullable: true, description: Use this appointment id with tracking.php and consent.php once checked in }
+        current_stop_id: { type: integer, nullable: true, description: The stop the visitor should head to now }
+        qr_pass:
+          type: object
+          nullable: true
+          description: Valid from 30 minutes before the first approved stop until the end of the last approved stop
+        stops: { type: array, items: { type: object, additionalProperties: true } }
     DeviceRegistration:
       type: object
       required: [installation_id, fcm_token]

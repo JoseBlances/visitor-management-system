@@ -63,6 +63,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -78,9 +79,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import ph.edu.isatu.visitor.BuildConfig
 import ph.edu.isatu.visitor.data.AppointmentDto
 import ph.edu.isatu.visitor.data.NotificationDto
+import ph.edu.isatu.visitor.data.VisitSummaryDto
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -99,8 +105,30 @@ private enum class HeaderScreen { Notifications, Profile }
 fun MainShell(state: VisitorUiState, viewModel: AppViewModel) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var headerScreen by remember { mutableStateOf<HeaderScreen?>(null) }
+    // Office decisions and suggested times arrive as notifications. Check whenever the
+    // app returns to the foreground and every 30 seconds while it stays open.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                viewModel.refreshNotifications()
+                delay(30_000)
+            }
+        }
+    }
+    // "None of these work" hands the request's details to the booking form.
+    LaunchedEffect(state.bookingPrefill) {
+        if (state.bookingPrefill != null) {
+            selectedTab = 2
+            headerScreen = null
+        }
+    }
     state.selectedAppointment?.let { appointment ->
         AppointmentDetailScreen(appointment, state.tracking, state.busy, viewModel)
+        return
+    }
+    state.selectedVisit?.let { visit ->
+        VisitDetailScreen(visit, state.tracking, state.busy, viewModel)
         return
     }
 
@@ -111,7 +139,10 @@ fun MainShell(state: VisitorUiState, viewModel: AppViewModel) {
                 TopAppBar(
                     title = { PortalBrand(subtitle = "Visitor mobile application") },
                     actions = {
-                        IconButton(onClick = { headerScreen = HeaderScreen.Notifications }) {
+                        IconButton(onClick = {
+                            headerScreen = HeaderScreen.Notifications
+                            viewModel.refreshNotifications()
+                        }) {
                             BadgedBox(
                                 badge = {
                                     if (state.unreadCount > 0) {
@@ -176,7 +207,7 @@ fun MainShell(state: VisitorUiState, viewModel: AppViewModel) {
                         onBook = { selectedTab = 2 },
                         onAppointments = { selectedTab = 1 },
                     )
-                    1 -> AppointmentsScreen(state.appointments, viewModel::openAppointment, viewModel::refreshAll)
+                    1 -> AppointmentsScreen(state.appointments, viewModel::openAppointment, viewModel::openVisit, viewModel::refreshAll)
                     else -> BookingScreen(state, viewModel)
                 }
             }
@@ -202,9 +233,7 @@ private fun HomeScreen(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> notificationsAllowed = granted }
 
-    val activeStatuses = setOf("pending_approval", "approved", "reschedule_proposed", "checked_in")
-    val active = state.appointments.filter { it.status in activeStatuses }.sortedBy { it.scheduledStartAt }
-    val upcoming = active.firstOrNull()
+    val upcoming = groupVisits(state.appointments).filter { it.isActive }.minByOrNull { it.startsAt }
     val firstName = state.user?.fullName?.trim()?.substringBefore(' ')?.ifBlank { "Visitor" } ?: "Visitor"
 
     LazyColumn(
@@ -281,7 +310,7 @@ private fun HomeScreen(
             if (upcoming == null) {
                 EmptyState("No upcoming visit", "Request an appointment when you are ready to visit the campus.")
             } else {
-                AppointmentCard(upcoming) { viewModel.openAppointment(upcoming.id) }
+                VisitListCard(upcoming, viewModel::openAppointment, viewModel::openVisit)
             }
         }
 
@@ -367,18 +396,114 @@ private fun VisitStep(icon: ImageVector, number: String, title: String, body: St
     }
 }
 
+/** An entry in the visits list: a single appointment, or every stop of a multi-stop visit. */
+private sealed interface VisitListItem {
+    val key: String
+    val startsAt: String
+    val isActive: Boolean
+
+    data class Single(val appointment: AppointmentDto) : VisitListItem {
+        override val key = "appointment-${appointment.id}"
+        override val startsAt = appointment.scheduledStartAt
+        override val isActive = appointment.status in activeAppointmentStatuses
+    }
+
+    data class MultiStop(val summary: VisitSummaryDto, val stops: List<AppointmentDto>) : VisitListItem {
+        override val key = "visit-${summary.id}"
+        override val startsAt = stops.minOfOrNull { it.scheduledStartAt }.orEmpty()
+        override val isActive = summary.status in setOf("open", "checked_in")
+    }
+}
+
+private val activeAppointmentStatuses = setOf("pending_approval", "approved", "reschedule_proposed", "checked_in")
+
+/** Keeps the server's order while folding each visit's stops into one entry. */
+private fun groupVisits(appointments: List<AppointmentDto>): List<VisitListItem> {
+    val stopsByVisit = appointments.filter { it.visit != null }.groupBy { it.visit!!.id }
+    val seen = mutableSetOf<Long>()
+    return appointments.mapNotNull { appointment ->
+        val visit = appointment.visit
+        when {
+            visit == null -> VisitListItem.Single(appointment)
+            seen.add(visit.id) -> VisitListItem.MultiStop(
+                visit,
+                stopsByVisit[visit.id].orEmpty().sortedBy { it.scheduledStartAt },
+            )
+            else -> null
+        }
+    }
+}
+
+@Composable
+private fun VisitListCard(item: VisitListItem, onOpenAppointment: (Long) -> Unit, onOpenVisit: (Long) -> Unit) {
+    when (item) {
+        is VisitListItem.Single -> AppointmentCard(item.appointment) { onOpenAppointment(item.appointment.id) }
+        is VisitListItem.MultiStop -> MultiStopVisitCard(item) { onOpenVisit(item.summary.id) }
+    }
+}
+
+@Composable
+private fun MultiStopVisitCard(item: VisitListItem.MultiStop, onClick: () -> Unit) {
+    val needsAction = item.stops.any { it.status == "reschedule_proposed" }
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        border = BorderStroke(1.dp, if (needsAction) Color(0xFFF4D86C) else BorderSoft),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(BlueSurface), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.LocationOn, contentDescription = null, tint = IsatuBlue)
+                }
+                Spacer(Modifier.size(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("${item.stops.size} office stops", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "${if (item.stops.firstOrNull()?.visitType == "walk_in") "Walk-in visit" else "Multi-stop visit"} • " +
+                            formatDateTime(item.startsAt),
+                        color = MutedInk,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Icon(Icons.Rounded.ChevronRight, contentDescription = "Open visit", tint = MutedInk)
+            }
+            Text(
+                item.stops.joinToString(" → ") { it.office.name },
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (needsAction) "An office suggested a new time" else "Reference ${item.summary.visitCode}",
+                    color = if (needsAction) Color(0xFF9A6700) else IsatuBlue,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(
+                    modifier = Modifier.background(BlueSurface, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text(visitStatusLabel(item.summary.status), color = IsatuBlueDark, style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun AppointmentsScreen(
     appointments: List<AppointmentDto>,
     onOpen: (Long) -> Unit,
+    onOpenVisit: (Long) -> Unit,
     onRefresh: () -> Unit,
 ) {
     var selectedFilter by remember { mutableStateOf("All") }
     val filters = listOf("All", "Active", "History")
-    val visible = appointments.filter {
+    val visible = groupVisits(appointments).filter {
         when (selectedFilter) {
-            "Active" -> it.status in listOf("pending_approval", "approved", "reschedule_proposed", "checked_in")
-            "History" -> it.status in listOf("completed", "window_closed", "rejected", "cancelled", "unanswered")
+            "Active" -> it.isActive
+            "History" -> !it.isActive
             else -> true
         }
     }
@@ -411,7 +536,7 @@ private fun AppointmentsScreen(
         if (visible.isEmpty()) {
             item { EmptyState("Nothing here yet", "Visits matching this filter will appear here.") }
         } else {
-            items(visible, key = { it.id }) { AppointmentCard(it) { onOpen(it.id) } }
+            items(visible, key = { it.key }) { VisitListCard(it, onOpen, onOpenVisit) }
         }
     }
 }
@@ -482,7 +607,11 @@ private fun NotificationsScreen(
             items(notifications, key = { it.id }) { notification ->
                 NotificationCard(notification) {
                     if (notification.readAt == null) viewModel.markNotificationRead(notification.id)
-                    notification.appointmentId?.let(viewModel::openAppointment)
+                    val visitId = (notification.data?.get("visit_id") as? Number)?.toLong()
+                    when {
+                        visitId != null -> viewModel.openVisit(visitId)
+                        else -> notification.appointmentId?.let(viewModel::openAppointment)
+                    }
                 }
             }
         }

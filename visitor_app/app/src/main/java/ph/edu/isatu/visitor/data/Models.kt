@@ -131,6 +131,16 @@ data class RescheduleProposalDto(
     val slots: List<RescheduleSlotDto> = emptyList(),
 )
 
+/** The multi-stop visit an appointment belongs to; null for a single appointment. */
+data class VisitSummaryDto(
+    val id: Long = 0,
+    val visitCode: String = "",
+    val visitDate: String = "",
+    val status: String = "open",
+    val stopNumber: Int = 0,
+    val stopCount: Int = 0,
+)
+
 data class AppointmentDto(
     val id: Long = 0,
     val registrationCode: String? = null,
@@ -147,10 +157,50 @@ data class AppointmentDto(
     val completedAt: String? = null,
     val createdAt: String = "",
     val qrPass: QrPassDto? = null,
+    val visit: VisitSummaryDto? = null,
     val visitor: VisitorSummaryDto? = null,
     val additionalDetails: String = "",
     val rescheduleProposal: RescheduleProposalDto? = null,
 )
+
+/**
+ * One campus trip with two or three office stops on the same day. Each stop is approved
+ * by its own office; the visit has a single QR pass and a single tracking session.
+ */
+data class VisitDto(
+    val id: Long = 0,
+    val visitCode: String = "",
+    val visitDate: String = "",
+    val status: String = "open",
+    val checkedInAt: String? = null,
+    val completedAt: String? = null,
+    val trackingAppointmentId: Long? = null,
+    val currentStopId: Long? = null,
+    val qrPass: QrPassDto? = null,
+    val stops: List<AppointmentDto> = emptyList(),
+)
+
+data class VisitData(val visit: VisitDto = VisitDto())
+
+data class VisitStopRequest(
+    val officeCode: String,
+    val purpose: String,
+    val subject: String,
+    val additionalDetails: String,
+    val scheduledStartAt: String,
+    val scheduledEndAt: String,
+)
+
+data class CreateVisitRequest(
+    /** "appointment" (scheduled stops) or "walk_in" (immediate pass, no times). */
+    val visitType: String,
+    val stops: List<VisitStopRequest>,
+    val deviceName: String,
+    val locationConsent: LocationConsentRequest,
+)
+
+data class CancelVisitRequest(val visitId: Long, val reason: String)
+data class VisitActionData(val visitId: Long = 0, val status: String = "", val cancelledStops: Int = 0)
 
 data class AppointmentsData(
     val appointments: List<AppointmentDto> = emptyList(),

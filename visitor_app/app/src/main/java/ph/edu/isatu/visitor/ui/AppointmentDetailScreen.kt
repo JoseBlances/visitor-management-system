@@ -77,7 +77,12 @@ fun AppointmentDetailScreen(
     BackHandler(onBack = viewModel::closeAppointment)
     val context = LocalContext.current
     var showCancel by remember { mutableStateOf(false) }
-    var selectedSlotId by remember { mutableLongStateOf(0L) }
+    var showDeclineProposal by remember { mutableStateOf(false) }
+    val pendingProposal = appointment.rescheduleProposal?.takeIf { it.status == "pending" }
+    // With a single suggested time there is nothing to choose: accept is one tap.
+    var selectedSlotId by remember(pendingProposal?.id) {
+        mutableLongStateOf(pendingProposal?.slots?.singleOrNull()?.id ?: 0L)
+    }
     var trackingRequested by remember(appointment.id) { mutableStateOf(false) }
     var locationPermissionMissing by remember(appointment.id) { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
@@ -134,7 +139,7 @@ fun AppointmentDetailScreen(
 
     if (appointment.status == "checked_in") {
         TrackingMapScreen(
-            appointment = appointment,
+            destination = appointment.office.name,
             tracking = tracking,
             trackingStarting = trackingRequested,
             locationPermissionMissing = locationPermissionMissing,
@@ -173,6 +178,24 @@ fun AppointmentDetailScreen(
                 }
             }
             item { StatusPill(appointment.status) }
+            appointment.visit?.let { visit ->
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = BlueSurface),
+                        border = BorderStroke(1.dp, Color(0xFFBED6FA)),
+                        shape = RoundedCornerShape(18.dp),
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Stop ${visit.stopNumber} of ${visit.stopCount} in your visit", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "One visitor pass covers every approved stop of visit ${visit.visitCode}.",
+                                color = MutedInk,
+                            )
+                            PrimaryButton("Open visit pass", { viewModel.openVisit(visit.id) }, Modifier.fillMaxWidth(), !busy)
+                        }
+                    }
+                }
+            }
             if (appointment.status == "pending_approval") {
                 item {
                     Card(
@@ -227,11 +250,15 @@ fun AppointmentDetailScreen(
                     )
                 }
             }
-            appointment.rescheduleProposal?.takeIf { it.status == "pending" }?.let { proposal ->
+            pendingProposal?.let { proposal ->
+                val singleSlot = proposal.slots.size == 1
                 item {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8DB)), shape = RoundedCornerShape(18.dp)) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("The office suggested another time", style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                if (singleSlot) "The office suggested another time" else "The office suggested other times",
+                                style = MaterialTheme.typography.titleLarge,
+                            )
                             Text(proposal.reason, fontWeight = FontWeight.SemiBold)
                             if (proposal.message.isNotBlank()) Text(proposal.message, color = MutedInk)
                             proposal.responseDeadline?.let { Text("Respond by ${formatDateTime(it)}", color = MutedInk) }
@@ -239,29 +266,34 @@ fun AppointmentDetailScreen(
                     }
                 }
                 items(proposal.slots, key = { it.id }) { slot ->
+                    val selected = selectedSlotId == slot.id
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = if (selectedSlotId == slot.id) Color(0xFFDCEBFF) else Color.White),
+                        colors = CardDefaults.cardColors(containerColor = if (selected) Color(0xFFDCEBFF) else Color.White),
+                        border = BorderStroke(1.dp, if (selected) IsatuBlue else BorderSoft),
                     ) {
                         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selectedSlotId == slot.id, { selectedSlotId = slot.id })
-                            Text(formatDateTime(slot.scheduledStartAt), fontWeight = FontWeight.SemiBold)
+                            if (!singleSlot) RadioButton(selected, { selectedSlotId = slot.id })
+                            Column(Modifier.padding(start = if (singleSlot) 6.dp else 0.dp)) {
+                                Text(formatVisitDate(slot.scheduledStartAt), fontWeight = FontWeight.SemiBold)
+                                Text(formatTimeSpan(slot.scheduledStartAt, slot.scheduledEndAt), color = MutedInk)
+                            }
                         }
                     }
                 }
                 item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedButton(
-                            onClick = { viewModel.respondToReschedule(proposal.id, "decline", null) },
-                            modifier = Modifier.weight(1f),
-                            enabled = !busy,
-                        ) { Text("Decline") }
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         PrimaryButton(
-                            "Accept time",
-                            { viewModel.respondToReschedule(proposal.id, "accept", selectedSlotId) },
-                            Modifier.weight(1f),
+                            if (singleSlot) "Accept suggested time" else "Accept selected time",
+                            { viewModel.acceptProposedTime(proposal.id, selectedSlotId) },
+                            Modifier.fillMaxWidth(),
                             !busy && selectedSlotId > 0,
                         )
+                        OutlinedButton(
+                            onClick = { showDeclineProposal = true },
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            enabled = !busy,
+                        ) { Text(if (singleSlot) "This time doesn't work" else "None of these work") }
                     }
                 }
             }
@@ -271,7 +303,12 @@ fun AppointmentDetailScreen(
                         onClick = { showCancel = true },
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                         enabled = !busy,
-                    ) { Text("Cancel appointment", color = MaterialTheme.colorScheme.error) }
+                    ) {
+                        Text(
+                            if (appointment.visit != null) "Cancel this stop" else "Cancel appointment",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
             item { Spacer(Modifier.height(18.dp)) }
@@ -287,7 +324,34 @@ fun AppointmentDetailScreen(
             },
         )
     }
+
+    if (showDeclineProposal && pendingProposal != null) {
+        AlertDialog(
+            onDismissRequest = { showDeclineProposal = false },
+            title = { Text("Choose your own time instead?") },
+            text = {
+                Text(
+                    "This declines the suggested time${if (pendingProposal.slots.size == 1) "" else "s"}. " +
+                        "The booking form opens with ${appointment.office.name}, your purpose, and your subject " +
+                        "already filled in, so you only need to pick a new time.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeclineProposal = false
+                    viewModel.declineAndRebook(pendingProposal.id, appointment)
+                }) { Text("Pick a new time") }
+            },
+            dismissButton = { TextButton(onClick = { showDeclineProposal = false }) { Text("Go back") } },
+        )
+    }
 }
+
+private fun formatVisitDate(value: String): String = runCatching {
+    val source = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+    val target = java.text.SimpleDateFormat("EEEE, MMM d, yyyy", java.util.Locale.US)
+    target.format(requireNotNull(source.parse(value)))
+}.getOrDefault(value)
 
 @Composable
 private fun DetailCard(content: @Composable ColumnScope.() -> Unit) {
@@ -391,7 +455,7 @@ private fun CancelAppointmentDialog(onDismiss: () -> Unit, onConfirm: (String) -
     )
 }
 
-private fun generateQrBitmap(payload: String): Bitmap? = runCatching {
+internal fun generateQrBitmap(payload: String): Bitmap? = runCatching {
     val matrix = QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, 720, 720)
     Bitmap.createBitmap(matrix.width, matrix.height, Bitmap.Config.ARGB_8888).apply {
         for (x in 0 until matrix.width) {

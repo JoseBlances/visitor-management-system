@@ -68,12 +68,13 @@ if ($summaryStmt) {
 }
 
 $recent = [];
+$visitColumns = visit_list_columns($conn, "a");
 $recentStmt = $conn->prepare(
     "SELECT a.id, a.registration_code, a.visitor_full_name, a.visitor_email,
             a.contact_number, a.visit_type, a.purpose, a.destination, a.subject,
             a.additional_details, a.scheduled_start_at, a.scheduled_end_at,
             a.status, a.rejection_reason, a.created_at, a.status_updated_at,
-            COALESCE(NULLIF(processor.display_name, ''), processor.username, '') AS processed_by
+            COALESCE(NULLIF(processor.display_name, ''), processor.username, '') AS processed_by{$visitColumns}
      FROM appointments a
      LEFT JOIN app_users processor ON processor.id = COALESCE(
         a.approved_by_user_id, a.rejected_by_user_id, a.completed_by_user_id, a.cancelled_by_user_id

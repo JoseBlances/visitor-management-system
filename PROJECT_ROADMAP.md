@@ -21,8 +21,14 @@ Admin, Security, and Office personnel use web dashboards on their computers.
 - Public signup is not offered on the staff login page.
 - A visitor requests an appointment in the visitor app.
 - The office can approve, decline with a reason, or suggest one or more available times.
+  It can also suggest a new time for an already approved appointment (approved change,
+  September 29, 2026).
 - The visitor can accept or decline a proposed time. A full chat system is not required
   for the first version.
+- A visitor can book one multi-stop visit: two or three different offices on the same
+  day, at least 10 minutes apart. Each office approves its own stop; the visit has one QR
+  pass, one gate check-in, and one GPS session (approved change, September 29, 2026; see
+  `MULTI_STOP_VISITS.md`).
 - Office personnel can publish weekly availability, unavailable dates/times, slot length,
   and visitor capacity so unavailable appointments cannot be requested.
 - The only bookable destinations are IT Department, IS Department, CS Department,
@@ -195,8 +201,41 @@ project/provider credentials and remain deployment configuration tasks.
 - [ ] Connect an institutional email provider.
 - [ ] Prepare signed internal-test builds before app-store submission.
 
+### Approved change within Phase 5 — multi-stop visits and reschedule improvements
+
+The project owner approved this change on September 29, 2026, while Phase 5 physical
+testing was still pending. Details: `MULTI_STOP_VISITS.md`.
+
+- [x] Add the additive `multi_stop_visits_migration.sql` (`visits` table, `visit_id` and
+  `stop_number` on appointments).
+- [x] Book two or three same-day office stops in one all-or-nothing request, with a
+  10-minute gap and a clash check against the visitor's other bookings.
+- [x] Offer the multi-office option under both Walk-in and Appointment; a walk-in visit
+  gets an immediate pass for offices accepting visitors.
+- [x] Issue one visit pass covering every approved stop; one scan checks in every approved
+  stop, and a stop approved later joins the active check-in.
+- [x] Keep one GPS session per visit that continues after individual stops end; show one
+  row, marker, and route per visit to Security.
+- [x] Let offices mark their stop's meeting done, show them the visitor's other stop times
+  without revealing the other offices, and let Security end the whole visit.
+- [x] Check suggested times for a stop against the visit's other stops; a time on another
+  day moves the stop out of the visit.
+- [x] Let offices suggest a new time for an approved appointment.
+- [x] Accept a single suggested time with one tap, show slot length, and add "None of these
+  work" with a prefilled rebooking form.
+- [x] Release held proposal slots when a request is cancelled.
+- [x] Open the related appointment or visit when a background push notification is tapped.
+- [x] Verify with 90 automated server checks on a disposable database, Android unit tests,
+  lint, and a debug build.
+- [ ] Apply the migration to each teammate's local database.
+- [ ] Test a multi-stop visit end to end on a physical phone, including a stop approved
+  while the visitor is on campus.
+- [ ] Complete the project owner's visual review of the Office and Security changes.
+
 ## Phase 6 — Analytics and reporting
 
+- Decide whether visitor counts use visits or office stops; a multi-stop visit currently
+  counts once per stop in Admin analytics.
 - Validate data definitions for total visitors, active tracks, duration, purpose,
   destination, and traffic periods.
 - Calculate charts only from completed or clearly defined appointment states.
@@ -217,6 +256,7 @@ project/provider credentials and remain deployment configuration tasks.
 ## Recommended next task
 
 Install the debug app on a physical Android phone and complete the Phase 5 acceptance
-checklist in `PHASE5_VISITOR_ANDROID_APP.md`, including notification and GPS/offline
-behavior. Do not finalize Phase 6 analytics until the visitor/Office/Security workflow
-has passed that end-to-end test; otherwise analytics would use unverified event data.
+checklist in `PHASE5_VISITOR_ANDROID_APP.md` and the multi-stop steps in
+`TEAMMATE_SETUP.md`, including notification and GPS/offline behavior. Do not finalize
+Phase 6 analytics until the visitor/Office/Security workflow has passed that end-to-end
+test; otherwise analytics would use unverified event data.
