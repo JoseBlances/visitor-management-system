@@ -29,6 +29,16 @@
         period: "month",
         loaded: false,
     };
+    const routeState = {
+        office: "",
+        data: null,
+        map: null,
+        layer: null,
+        campusLayer: null,
+        campus: null,
+        campusStale: false,
+        fittedKey: "",
+    };
 
     const profileMenu = document.getElementById("profileMenu");
     const profileBtn = document.getElementById("profileBtn");
@@ -151,14 +161,21 @@
                 button.removeAttribute("aria-current");
             }
         });
+        if (view === "analytics") {
+            // Leaflet cannot measure a hidden container, so draw once the view is visible.
+            drawRouteMap();
+        }
         let target = window.location.pathname;
         if (view === "users") {
             target += "#users";
         } else if (view === "analytics") {
             target += "#analytics";
+        } else if (view === "campus") {
+            target += "#campus";
         }
         window.history.replaceState(null, "", target);
         window.scrollTo({ top: 0, behavior: "smooth" });
+        document.dispatchEvent(new CustomEvent("admin:viewchange", { detail: { view: view } }));
     }
 
     function renderVisitors() {
@@ -715,7 +732,214 @@
         });
     }
 
+    function formatDistance(meters) {
+        const value = Number(meters || 0);
+        if (value <= 0) {
+            return "—";
+        }
+        return value < 1000 ? Math.round(value) + " m" : (value / 1000).toFixed(1) + " km";
+    }
+
+    function routeUsageColor(ratio) {
+        if (ratio >= 0.67) {
+            return "#e2471d";
+        }
+        return ratio >= 0.34 ? "#f0a01c" : "#5b9bf0";
+    }
+
+    function renderRouteMetrics(summary) {
+        const data = summary || {};
+        const routes = Number(data.routes || 0);
+        const busiest = Number(data.busiest_segment_visitors || 0);
+        const metrics = document.getElementById("routeAnalyticsMetrics");
+        metrics.replaceChildren();
+        [
+            { label: "Routes analyzed", value: routes, className: "is-blue" },
+            { label: "Avg. walking distance", value: formatDistance(data.average_distance_meters), className: "is-green" },
+            { label: "Routes on busiest path", value: routes > 0 ? Math.round((busiest / routes) * 100) + "%" : "—", className: "is-orange" },
+            { label: "GPS points used", value: Number(data.points_used || 0), className: "is-purple" },
+        ].forEach(function (metric) {
+            const card = document.createElement("div");
+            card.className = "analytics-location-metric " + metric.className;
+            const value = document.createElement("strong");
+            value.textContent = String(metric.value);
+            const label = document.createElement("span");
+            label.textContent = metric.label;
+            card.append(value, label);
+            metrics.appendChild(card);
+        });
+    }
+
+    function renderRouteDestinations(destinations) {
+        const host = document.getElementById("routeDestinationList");
+        const rows = Array.isArray(destinations) ? destinations : [];
+        const maxRoutes = rows.reduce(function (max, item) { return Math.max(max, Number(item.routes || 0)); }, 0);
+        host.replaceChildren();
+        rows.forEach(function (item) {
+            const routes = Number(item.routes || 0);
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "analytics-route-destination" + (item.code === routeState.office ? " is-active" : "");
+            button.setAttribute("data-route-office", item.code || "");
+            const title = document.createElement("strong");
+            title.textContent = item.label || officeNames[item.code] || item.code || "Unknown destination";
+            const copy = document.createElement("span");
+            copy.textContent = routes + " route" + (routes === 1 ? "" : "s") + " · avg " + formatDistance(item.average_distance_meters) + " walked";
+            const walk = document.createElement("span");
+            walk.className = "analytics-route-walk";
+            walk.textContent = describeWalkToOffice(item);
+            const bar = document.createElement("div");
+            bar.className = "analytics-route-bar";
+            const fill = document.createElement("i");
+            fill.style.width = (maxRoutes > 0 ? Math.round((routes / maxRoutes) * 100) : 0) + "%";
+            bar.appendChild(fill);
+            button.append(title, copy, walk, bar);
+            host.appendChild(button);
+        });
+        document.getElementById("routeDestinationEmpty").hidden = rows.length > 0;
+    }
+
+    function describeWalkToOffice(item) {
+        if (!item.has_pin) {
+            return "Place this office's pin in Campus Map to measure the walk to it.";
+        }
+        const arrivals = Number(item.arrivals || 0);
+        if (arrivals === 0) {
+            return "No tracked visitor reached the office pin yet.";
+        }
+        const walked = Number(item.average_walk_to_office_meters || 0);
+        const direct = Number(item.average_direct_meters || 0);
+        const detour = direct > 0 ? " (" + (walked / direct).toFixed(1) + "× the direct distance)" : "";
+        const minutes = Number(item.average_minutes_to_office || 0);
+        return "To office: " + formatDistance(walked) + detour + " · " + minutes + " min · "
+            + arrivals + " arrival" + (arrivals === 1 ? "" : "s");
+    }
+
+    function renderRouteGates(gates, routes) {
+        const host = document.getElementById("routeGateList");
+        const rows = Array.isArray(gates) ? gates : [];
+        const empty = document.getElementById("routeGateEmpty");
+        host.replaceChildren();
+        rows.forEach(function (gate) {
+            const entries = Number(gate.entries || 0);
+            const exits = Number(gate.exits || 0);
+            const card = document.createElement("div");
+            card.className = "analytics-route-destination is-static";
+            const title = document.createElement("strong");
+            title.textContent = gate.name;
+            const copy = document.createElement("span");
+            copy.textContent = entries + " entr" + (entries === 1 ? "y" : "ies")
+                + (routes > 0 ? " (" + Math.round((entries / routes) * 100) + "%)" : "")
+                + " · " + exits + " exit" + (exits === 1 ? "" : "s");
+            const bar = document.createElement("div");
+            bar.className = "analytics-route-bar is-gate";
+            const fill = document.createElement("i");
+            fill.style.width = (routes > 0 ? Math.round((entries / routes) * 100) : 0) + "%";
+            bar.appendChild(fill);
+            card.append(title, copy, bar);
+            host.appendChild(card);
+        });
+        empty.hidden = rows.length > 0;
+    }
+
+    async function applyRouteCampus() {
+        routeState.campus = await CampusMap.load();
+        if (!routeState.map) {
+            return;
+        }
+        CampusMap.drawOverlay(routeState.campusLayer, routeState.campus);
+        // Frame the campus only if the route data has not already framed the map.
+        CampusMap.lockToCampus(routeState.map, routeState.campus, !routeState.fittedKey);
+    }
+
+    function drawRouteMap() {
+        const host = document.getElementById("routeAnalyticsMap");
+        const data = routeState.data;
+        if (!data || host.offsetWidth === 0) {
+            return;
+        }
+        if (typeof L === "undefined") {
+            showMessage("routeAnalyticsError", "The map library could not load. Check your internet connection and refresh the page.");
+            return;
+        }
+        if (!routeState.map) {
+            routeState.map = L.map(host, { preferCanvas: true, scrollWheelZoom: false }).setView([10.7177, 122.5559], 17);
+            L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+                maxZoom: 19,
+                attribution: "&copy; OpenStreetMap contributors",
+            }).addTo(routeState.map);
+            routeState.campusLayer = L.layerGroup().addTo(routeState.map);
+            routeState.layer = L.layerGroup().addTo(routeState.map);
+            applyRouteCampus();
+        } else if (routeState.campusStale) {
+            routeState.campusStale = false;
+            applyRouteCampus();
+        }
+        routeState.map.invalidateSize();
+        routeState.layer.clearLayers();
+
+        const segments = Array.isArray(data.segments) ? data.segments : [];
+        const routes = Number((data.summary && data.summary.routes) || 0);
+        const maxVisitors = segments.reduce(function (max, segment) { return Math.max(max, Number(segment.visitors || 0)); }, 1);
+        // Segments arrive busiest first; draw them last so they sit on top.
+        segments.slice().reverse().forEach(function (segment) {
+            const ratio = Number(segment.visitors || 0) / maxVisitors;
+            L.polyline([segment.from, segment.to], {
+                color: routeUsageColor(ratio),
+                weight: 3 + ratio * 7,
+                opacity: 0.55 + ratio * 0.4,
+                lineCap: "round",
+            }).bindTooltip(segment.visitors + " of " + routes + " visitor route" + (routes === 1 ? "" : "s") + " used this path", { sticky: true })
+                .addTo(routeState.layer);
+        });
+        document.getElementById("routeAnalyticsEmpty").hidden = segments.length > 0;
+
+        // Only re-frame the map when the filter changes, so auto-refresh keeps the admin's zoom.
+        const key = analyticsState.period + "|" + routeState.office;
+        if (segments.length > 0 && routeState.fittedKey !== key) {
+            const bounds = L.latLngBounds([]);
+            segments.forEach(function (segment) {
+                bounds.extend(segment.from);
+                bounds.extend(segment.to);
+            });
+            routeState.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 });
+            routeState.fittedKey = key;
+        }
+    }
+
+    async function loadRouteAnalytics() {
+        showMessage("routeAnalyticsError", "");
+        const params = new URLSearchParams({ period: analyticsState.period });
+        if (routeState.office) {
+            params.set("office", routeState.office);
+        }
+        try {
+            const data = await fetchJson("admin_route_analytics.php?" + params.toString());
+            if (!data || !data.success) {
+                showMessage("routeAnalyticsError", (data && data.message) || "Could not load route analytics.");
+                return;
+            }
+            routeState.data = data;
+            renderRouteMetrics(data.summary);
+            renderRouteDestinations(data.destinations);
+            renderRouteGates(data.gates, Number((data.summary && data.summary.routes) || 0));
+            document.getElementById("routeCampusHint").hidden = Boolean(data.campus_configured);
+            drawRouteMap();
+        } catch (error) {
+            if (error.message !== "Not authenticated") {
+                showMessage("routeAnalyticsError", error.message || "Could not reach the analytics server.");
+            }
+        }
+    }
+
+    function setRouteOffice(office) {
+        routeState.office = office || "";
+        document.getElementById("routeOfficeFilter").value = routeState.office;
+        loadRouteAnalytics();
+    }
+
     async function loadAnalytics() {
+        loadRouteAnalytics();
         showMessage("analyticsError", "");
         document.querySelectorAll("[data-analytics-period]").forEach(function (button) {
             button.classList.toggle("is-active", button.getAttribute("data-analytics-period") === analyticsState.period);
@@ -776,6 +1000,39 @@
             analyticsState.period = button.getAttribute("data-analytics-period") || "month";
             loadAnalytics();
         });
+    });
+
+    const routeOfficeFilter = document.getElementById("routeOfficeFilter");
+    Object.keys(officeNames).forEach(function (code) {
+        const option = document.createElement("option");
+        option.value = code;
+        option.textContent = officeNames[code];
+        routeOfficeFilter.appendChild(option);
+    });
+    document.querySelectorAll("[data-open-campus]").forEach(function (link) {
+        link.addEventListener("click", function (event) {
+            event.preventDefault();
+            switchView("campus");
+        });
+    });
+    document.addEventListener("campus:updated", function () {
+        // The analytics map is hidden while the campus page is open; re-apply the campus when it is shown.
+        routeState.campusStale = true;
+        // The campus boundary changes which points count, so reload the numbers too.
+        if (analyticsState.loaded) {
+            loadRouteAnalytics();
+        }
+    });
+    routeOfficeFilter.addEventListener("change", function () {
+        setRouteOffice(routeOfficeFilter.value);
+    });
+    document.getElementById("routeDestinationList").addEventListener("click", function (event) {
+        const button = event.target.closest("[data-route-office]");
+        if (button) {
+            const office = button.getAttribute("data-route-office");
+            // Clicking the selected destination again goes back to all destinations.
+            setRouteOffice(office === routeState.office ? "" : office);
+        }
     });
 
     document.querySelectorAll("[data-visitor-filter]").forEach(function (card) {
@@ -1004,9 +1261,8 @@
         year: "numeric",
     }).format(new Date()));
 
-    const initialView = window.location.hash === "#users"
-        ? "users"
-        : window.location.hash === "#analytics" ? "analytics" : "dashboard";
+    const hashViews = { "#users": "users", "#analytics": "analytics", "#campus": "campus" };
+    const initialView = hashViews[window.location.hash] || "dashboard";
     switchView(initialView);
     updateOfficeField();
     loadDashboard();

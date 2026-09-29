@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ISATU Admin Dashboard</title>
-    <link rel="stylesheet" href="style.css?v=20260919-2">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="style.css?v=20260928-2">
 </head>
 <body class="admin-page">
     <header class="admin-topbar">
@@ -63,6 +64,10 @@
                 <button class="admin-nav-item" type="button" data-admin-view="analytics">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M7 16l4-5 4 3 5-7"/></svg>
                     <span>Visitor Analytics</span>
+                </button>
+                <button class="admin-nav-item" type="button" data-admin-view="campus">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Zm0 0v14m6-12v14"/></svg>
+                    <span>Campus Map</span>
                 </button>
             </nav>
         </aside>
@@ -334,6 +339,55 @@
                     <div class="analytics-heatmap-wrap" id="analyticsHeatmap"></div>
                 </article>
 
+                <article class="analytics-card analytics-route-card">
+                    <div class="analytics-card-header">
+                        <div>
+                            <h2>Route Analytics</h2>
+                            <p>Paths visitors walk most often, from consent-based GPS routes</p>
+                        </div>
+                        <label class="admin-select-label" for="routeOfficeFilter">
+                            <span>Destination</span>
+                            <select id="routeOfficeFilter">
+                                <option value="">All destinations</option>
+                            </select>
+                        </label>
+                    </div>
+                    <p class="admin-message is-error" id="routeAnalyticsError" role="alert" hidden></p>
+                    <p class="analytics-inline-empty analytics-route-hint" id="routeCampusHint" hidden>
+                        The campus boundary is not set yet, so routes outside ISATU are included.
+                        Draw it in <a href="#campus" data-open-campus>Campus Map</a> to analyse only the campus.
+                    </p>
+                    <div class="analytics-location-metrics" id="routeAnalyticsMetrics"></div>
+                    <div class="analytics-route-layout">
+                        <div>
+                            <div class="analytics-route-map-wrap">
+                                <div class="analytics-route-map" id="routeAnalyticsMap" aria-label="Map of the paths visitors walk most often"></div>
+                                <div class="analytics-route-empty" id="routeAnalyticsEmpty" hidden>
+                                    No visitor routes were recorded for this period.
+                                </div>
+                            </div>
+                            <div class="analytics-heat-legend analytics-route-legend" aria-label="Path usage legend">
+                                <span>Path usage</span>
+                                <span><i class="is-low"></i>Low</span>
+                                <span><i class="is-medium"></i>Medium</span>
+                                <span><i class="is-high"></i>High</span>
+                            </div>
+                        </div>
+                        <div class="analytics-route-destinations">
+                            <h3>Routes by destination</h3>
+                            <div id="routeDestinationList"></div>
+                            <div class="analytics-inline-empty" id="routeDestinationEmpty" hidden>
+                                Destinations will appear after tracked visitors walk to an office.
+                            </div>
+                            <h3 class="analytics-route-subheading">Entry gates</h3>
+                            <div id="routeGateList"></div>
+                            <div class="analytics-inline-empty" id="routeGateEmpty" hidden>
+                                Add gates in <a href="#campus" data-open-campus>Campus Map</a> to see which entrance visitors prefer.
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
                 <div class="analytics-secondary-grid">
                     <article class="analytics-card analytics-location-card">
                         <div class="analytics-card-header">
@@ -359,6 +413,63 @@
                         </div>
                         <div class="analytics-insight-list" id="analyticsInsightList"></div>
                     </article>
+                </div>
+            </section>
+
+            <section class="admin-view campus-view" id="campusView" data-view-panel="campus" hidden>
+                <header class="analytics-header">
+                    <div>
+                        <p class="admin-eyebrow">Campus setup</p>
+                        <h1>Campus Map</h1>
+                        <p>Draw the ISATU campus boundary and place its gates and offices. Maps and route analytics stay inside this boundary.</p>
+                    </div>
+                </header>
+
+                <div class="campus-setup-layout">
+                    <div class="campus-setup-map-wrap">
+                        <div class="campus-setup-map" id="campusSetupMap" aria-label="Campus map editor"></div>
+                    </div>
+
+                    <aside class="analytics-card campus-setup-panel" aria-label="Campus map tools">
+                        <div class="analytics-period-tabs campus-mode-tabs" role="group" aria-label="What to edit">
+                            <button class="is-active" type="button" data-campus-mode="boundary">Boundary</button>
+                            <button type="button" data-campus-mode="gates">Gates</button>
+                            <button type="button" data-campus-mode="offices">Offices</button>
+                        </div>
+
+                        <div data-campus-panel="boundary">
+                            <p class="campus-setup-help">Click the map to add the campus corners in order, going around the campus. Drag a corner to adjust it.</p>
+                            <p class="campus-setup-count" id="campusCornerCount">0 corners</p>
+                            <div class="campus-setup-actions">
+                                <button class="admin-cancel-button" id="campusUndoCornerBtn" type="button">Undo last corner</button>
+                                <button class="admin-cancel-button" id="campusClearBoundaryBtn" type="button">Clear boundary</button>
+                            </div>
+                        </div>
+
+                        <div data-campus-panel="gates" hidden>
+                            <label class="campus-setup-field" for="campusGateName">
+                                <span>Gate name</span>
+                                <input id="campusGateName" type="text" maxlength="100" placeholder="e.g. Main Gate" autocomplete="off">
+                            </label>
+                            <p class="campus-setup-help">Type a name, then click the map where the gate is. Drag a gate to adjust it.</p>
+                            <div class="campus-setup-list" id="campusGateList"></div>
+                        </div>
+
+                        <div data-campus-panel="offices" hidden>
+                            <label class="campus-setup-field" for="campusOfficeSelect">
+                                <span>Office</span>
+                                <select id="campusOfficeSelect"></select>
+                            </label>
+                            <p class="campus-setup-help">Pick an office, then click its building on the map. Clicking again moves the pin.</p>
+                            <div class="campus-setup-list" id="campusOfficeList"></div>
+                        </div>
+
+                        <p class="admin-message" id="campusSetupMessage" role="status" hidden></p>
+                        <div class="campus-setup-save">
+                            <span id="campusSetupStatus">No changes</span>
+                            <button class="admin-primary-button" id="campusSaveBtn" type="button">Save campus map</button>
+                        </div>
+                    </aside>
                 </div>
             </section>
         </main>
@@ -415,7 +526,10 @@
         </form>
     </dialog>
 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="auth.js?v=20260917-2"></script>
-    <script src="admin.js?v=20260918-3"></script>
+    <script src="campus_map.js?v=20260928-1"></script>
+    <script src="campus_setup.js?v=20260928-1"></script>
+    <script src="admin.js?v=20260928-2"></script>
 </body>
 </html>

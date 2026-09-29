@@ -4181,6 +4181,353 @@ button.admin-stat-card:hover {
     font-size: 9px;
 }
 
+.analytics-route-card {
+    margin-bottom: 16px;
+}
+
+.analytics-route-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.8fr) minmax(240px, 0.8fr);
+    gap: 16px;
+}
+
+.analytics-route-map-wrap {
+    position: relative;
+}
+
+.analytics-route-map {
+    /* Keeps Leaflet's pane z-indexes from covering the top bar menus. */
+    isolation: isolate;
+    height: 380px;
+    border: 1px solid #dce3eb;
+    border-radius: 9px;
+    background: #eef2f6;
+}
+
+.analytics-route-empty {
+    position: absolute;
+    inset: 50% auto auto 50%;
+    z-index: 1;
+    max-width: 80%;
+    padding: 10px 14px;
+    border: 1px dashed #cbd2da;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.94);
+    color: #697480;
+    font-size: 10px;
+    text-align: center;
+    transform: translate(-50%, -50%);
+}
+
+.analytics-route-empty[hidden] {
+    display: none;
+}
+
+.analytics-route-legend {
+    margin-top: 8px;
+}
+
+.analytics-route-legend i {
+    width: 16px;
+    height: 5px;
+    border-radius: 999px;
+    opacity: 1;
+}
+
+.analytics-route-legend i.is-low {
+    background: #5b9bf0;
+    opacity: 1;
+}
+
+.analytics-route-legend i.is-medium {
+    background: #f0a01c;
+    opacity: 1;
+}
+
+.analytics-route-legend i.is-high {
+    background: #e2471d;
+    opacity: 1;
+}
+
+.analytics-route-destinations h3 {
+    margin: 0 0 10px;
+    color: #26313f;
+    font-size: 12px;
+}
+
+#routeDestinationList {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.analytics-route-destination {
+    display: flex;
+    width: 100%;
+    padding: 10px;
+    flex-direction: column;
+    gap: 4px;
+    border: 1px solid #dce3eb;
+    border-radius: 8px;
+    background: #f8fafc;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.analytics-route-destination:hover,
+.analytics-route-destination.is-active {
+    border-color: #377fec;
+    background: #f2f7ff;
+}
+
+.analytics-route-destination strong {
+    color: #283441;
+    font-size: 10px;
+}
+
+.analytics-route-destination span {
+    color: #737d89;
+    font-size: 9px;
+}
+
+.analytics-route-bar {
+    height: 5px;
+    border-radius: 999px;
+    background: #e3e8ee;
+    overflow: hidden;
+}
+
+.analytics-route-bar i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: #377fec;
+}
+
+.analytics-route-bar.is-gate i {
+    background: #159969;
+}
+
+.analytics-route-destination.is-static {
+    cursor: default;
+}
+
+.analytics-route-destination.is-static:hover {
+    border-color: #dce3eb;
+    background: #f8fafc;
+}
+
+.analytics-route-destination .analytics-route-walk {
+    color: #0755b5;
+}
+
+.analytics-route-destinations .analytics-route-subheading {
+    margin-top: 16px;
+}
+
+#routeGateList {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.analytics-route-hint {
+    margin: 0 0 12px;
+}
+
+/* Campus pins shared by the admin, security, and campus setup maps. */
+.campus-office-pin span,
+.campus-gate-pin span,
+.campus-vertex-pin span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 2px solid #ffffff;
+    box-shadow: 0 1px 4px rgba(20, 35, 55, 0.45);
+}
+
+.campus-office-pin span {
+    border-radius: 50% 50% 50% 0;
+    background: #0755b5;
+    transform: rotate(-45deg);
+}
+
+.campus-gate-pin span {
+    border-radius: 50%;
+    background: #159969;
+}
+
+.campus-vertex-pin span {
+    border-radius: 3px;
+    background: #ffffff;
+    border-color: #0755b5;
+}
+
+.campus-setup-label {
+    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.admin-message.is-success {
+    background: #effaf4;
+    color: #127547;
+}
+
+.campus-setup-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 16px;
+    align-items: start;
+}
+
+.campus-setup-map {
+    isolation: isolate;
+    height: 560px;
+    border: 1px solid #dce3eb;
+    border-radius: 13px;
+    background: #eef2f6;
+    cursor: crosshair;
+}
+
+.campus-setup-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.campus-mode-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.campus-setup-panel [data-campus-panel][hidden] {
+    display: none;
+}
+
+.campus-setup-help {
+    margin: 0 0 8px;
+    color: #687480;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.campus-setup-count {
+    margin: 0 0 8px;
+    color: #26313f;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.campus-setup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.campus-setup-actions button {
+    min-height: 32px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.campus-setup-field {
+    display: flex;
+    margin-bottom: 8px;
+    flex-direction: column;
+    gap: 5px;
+    color: #424b56;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.campus-setup-field input,
+.campus-setup-field select {
+    width: 100%;
+    height: 36px;
+    margin: 0;
+    padding: 6px 9px;
+    border: 1px solid #aeb4bc;
+    border-radius: 6px;
+    background: #ffffff;
+    font-size: 12px;
+}
+
+.campus-setup-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.campus-setup-row {
+    display: flex;
+    padding: 8px 10px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid #dce3eb;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.campus-setup-row div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.campus-setup-row strong {
+    color: #283441;
+    font-size: 11px;
+}
+
+.campus-setup-row span {
+    color: #737d89;
+    font-size: 10px;
+}
+
+.campus-setup-remove {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    border: 1px solid #d5dbe2;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #b42318;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.campus-setup-save {
+    display: flex;
+    padding-top: 12px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border-top: 1px solid #e1e5ea;
+}
+
+.campus-setup-save span {
+    color: #687480;
+    font-size: 11px;
+}
+
+@media (max-width: 1050px) {
+    .campus-setup-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .campus-setup-map {
+        height: 420px;
+    }
+}
+
 .analytics-insight-list {
     display: flex;
     flex-direction: column;
@@ -4250,7 +4597,8 @@ button.admin-stat-card:hover {
 
 @media (max-width: 1050px) {
     .analytics-primary-grid,
-    .analytics-secondary-grid {
+    .analytics-secondary-grid,
+    .analytics-route-layout {
         grid-template-columns: 1fr;
     }
 
@@ -4303,6 +4651,10 @@ button.admin-stat-card:hover {
 
     .analytics-zones {
         grid-template-columns: 1fr;
+    }
+
+    .analytics-route-map {
+        height: 300px;
     }
 
     .analytics-chart-host {

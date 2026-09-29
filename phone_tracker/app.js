@@ -10,6 +10,9 @@
 
     const APPT_TOKEN_KEY = "phone_tracker_appointment_token";
     let watchId = null;
+    let anchorPosition = null;
+    const MIN_MOVEMENT_METERS = 10;
+    const MAX_MOVEMENT_ACCURACY_METERS = 50;
     let pollTimer = null;
     let autoStarted = false;
     let trackedDeviceName = "My Phone";
@@ -361,6 +364,32 @@
         }
     }
 
+    function distanceMeters(a, b) {
+        const toRad = Math.PI / 180;
+        const dLat = (b.latitude - a.latitude) * toRad;
+        const dLng = (b.longitude - a.longitude) * toRad;
+        const h = Math.sin(dLat / 2) ** 2
+            + Math.cos(a.latitude * toRad) * Math.cos(b.latitude * toRad) * Math.sin(dLng / 2) ** 2;
+        return 2 * 6371000 * Math.asin(Math.sqrt(h));
+    }
+
+    // GPS readings wander by several metres even when the phone is still. Keep reporting the
+    // last accepted position until the phone has moved further than the reading's accuracy radius.
+    function stabilize(coords) {
+        const accuracy = Number.isFinite(coords.accuracy) ? coords.accuracy : Infinity;
+        const current = { latitude: coords.latitude, longitude: coords.longitude, accuracy: accuracy };
+        const previous = anchorPosition;
+        const moved = previous !== null
+            && accuracy <= MAX_MOVEMENT_ACCURACY_METERS
+            && distanceMeters(previous, current) > Math.max(MIN_MOVEMENT_METERS, accuracy);
+        const sharper = previous !== null && accuracy < previous.accuracy / 2;
+        if (previous === null || moved || sharper) {
+            anchorPosition = current;
+            return current;
+        }
+        return previous;
+    }
+
     function startWatch() {
         if (!currentAppointmentToken || currentAppointmentToken.length !== 64) {
             setTrackingStatus("waiting for appointment pass.");
@@ -377,6 +406,7 @@
         setTrackingStatus("starting...");
         watchId = navigator.geolocation.watchPosition(
             async function (position) {
+                const reported = stabilize(position.coords);
                 try {
                     const response = await fetch("save_location.php", {
                         method: "POST",
@@ -384,9 +414,9 @@
                         body: JSON.stringify({
                             appointment_token: currentAppointmentToken,
                             device_name: trackedDeviceName || "My Phone",
-                            latitude: position.coords.latitude,
-                            longitude: position.coords.longitude,
-                            accuracy: position.coords.accuracy,
+                            latitude: reported.latitude,
+                            longitude: reported.longitude,
+                            accuracy: Number.isFinite(reported.accuracy) ? reported.accuracy : null,
                         }),
                     });
                     const result = await response.json();
@@ -410,6 +440,7 @@
         if (watchId !== null && navigator.geolocation) {
             navigator.geolocation.clearWatch(watchId);
             watchId = null;
+            anchorPosition = null;
         }
         autoStarted = false;
         if (locationPollTimer) {

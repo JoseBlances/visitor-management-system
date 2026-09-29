@@ -326,6 +326,12 @@
             maxZoom: 19,
             attribution: "&copy; OpenStreetMap contributors",
         }).addTo(monitoringState.map);
+        const campusLayer = L.layerGroup().addTo(monitoringState.map);
+        CampusMap.load().then(function (campus) {
+            CampusMap.drawOverlay(campusLayer, campus);
+            // Keep the monitoring map on the ISATU campus; frame it unless visitors were already framed.
+            CampusMap.lockToCampus(monitoringState.map, campus, !monitoringState.fittedLiveMarkers);
+        });
     }
 
     function clearRoute() {

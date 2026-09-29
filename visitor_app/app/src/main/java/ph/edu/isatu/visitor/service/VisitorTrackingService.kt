@@ -47,6 +47,7 @@ class VisitorTrackingService : Service() {
     private var sessionId: Long = 0
     private var maximumBatchPoints: Int = 100
     private var locationCallback: LocationCallback? = null
+    private var anchorLocation: Location? = null
     private var monitorJob: Job? = null
 
     override fun onCreate() {
@@ -129,9 +130,34 @@ class VisitorTrackingService : Service() {
 
     private fun handleLocation(location: Location) {
         if (sessionId <= 0) return
+        val reported = stabilize(location)
         scope.launch {
-            repository.queueLocation(appointmentId, sessionId, location)
+            repository.queueLocation(appointmentId, sessionId, reported)
             flushQueued()
+        }
+    }
+
+    /**
+     * GPS readings wander by several metres even when the phone is still. Keep reporting the
+     * last accepted position (with a fresh timestamp, so Security still sees the visitor as live)
+     * until the phone has moved further than the reading's own accuracy radius.
+     */
+    private fun stabilize(location: Location): Location {
+        val previous = anchorLocation
+        val accuracy = if (location.hasAccuracy()) location.accuracy else Float.MAX_VALUE
+        val previousAccuracy = if (previous?.hasAccuracy() == true) previous.accuracy else Float.MAX_VALUE
+        val moved = previous != null &&
+            accuracy <= MAX_MOVEMENT_ACCURACY_METERS &&
+            previous.distanceTo(location) > maxOf(MIN_MOVEMENT_METERS, accuracy)
+        val sharper = accuracy < previousAccuracy / 2
+        if (previous == null || moved || sharper) {
+            anchorLocation = Location(location)
+            return location
+        }
+        return Location(location).apply {
+            latitude = previous.latitude
+            longitude = previous.longitude
+            if (previous.hasAccuracy()) this.accuracy = previous.accuracy
         }
     }
 
@@ -245,6 +271,8 @@ class VisitorTrackingService : Service() {
         const val EXTRA_APPOINTMENT_ID = "appointment_id"
         private const val CHANNEL_ID = "active_visit_tracking"
         private const val NOTIFICATION_ID = 4101
+        private const val MIN_MOVEMENT_METERS = 10f
+        private const val MAX_MOVEMENT_ACCURACY_METERS = 50f
 
         fun start(context: Context, appointmentId: Long) {
             val intent = Intent(context, VisitorTrackingService::class.java)
