@@ -10,6 +10,9 @@
 
     const APPT_TOKEN_KEY = "phone_tracker_appointment_token";
     let watchId = null;
+    let anchorPosition = null;
+    const MIN_MOVEMENT_METERS = 10;
+    const MAX_MOVEMENT_ACCURACY_METERS = 50;
     let pollTimer = null;
     let autoStarted = false;
     let trackedDeviceName = "My Phone";
@@ -26,6 +29,8 @@
     const appointmentSubmit = document.getElementById("appointmentSubmit");
     const qrHost = document.getElementById("qrHost");
     const tokenDisplay = document.getElementById("tokenDisplay");
+    const tokenLine = document.getElementById("tokenLine");
+    const appointmentStateMessage = document.getElementById("appointmentStateMessage");
     const appointmentAtInput = document.getElementById("appointmentAt");
     const visitorMapPanel = document.getElementById("visitorMapPanel");
     const visitCompleteNotice = document.getElementById("visitCompleteNotice");
@@ -101,7 +106,22 @@
         if (s === "cancelled") {
             return { label: "Cancelled", cls: "status-cancelled" };
         }
-        return { label: "Pending", cls: "status-pending" };
+        if (s === "approved") {
+            return { label: "Approved", cls: "status-active" };
+        }
+        if (s === "rejected") {
+            return { label: "Declined", cls: "status-cancelled" };
+        }
+        if (s === "unanswered") {
+            return { label: "Office Did Not Respond", cls: "status-cancelled" };
+        }
+        if (s === "reschedule_proposed") {
+            return { label: "Reschedule Proposed", cls: "status-pending" };
+        }
+        if (s === "window_closed") {
+            return { label: "Appointment Done", cls: "status-completed" };
+        }
+        return { label: "Waiting for Office Response", cls: "status-pending" };
     }
 
     function ensureMapReady() {
@@ -164,7 +184,54 @@
         } catch (error) {}
     }
 
-    function showAppointmentQr(token) {
+    function renderAppointmentState(status, token) {
+        const normalizedStatus = String(status || "pending_approval").toLowerCase();
+        const qrAvailable = normalizedStatus === "approved" || normalizedStatus === "checked_in";
+
+        if (qrHost) {
+            qrHost.hidden = !qrAvailable;
+            qrHost.innerHTML = "";
+        }
+        if (tokenLine) {
+            tokenLine.hidden = !qrAvailable;
+        }
+        if (tokenDisplay) {
+            tokenDisplay.textContent = qrAvailable ? token : "";
+        }
+        if (qrAvailable && qrHost && typeof QRCode !== "undefined") {
+            new QRCode(qrHost, {
+                text: token,
+                width: 200,
+                height: 200,
+            });
+        }
+
+        const messages = {
+            pending_approval: "<strong>Appointment request sent.</strong> Waiting for the office to respond.",
+            reschedule_proposed: "<strong>The office suggested another schedule.</strong> Review the proposed time in your notifications.",
+            approved: "<strong>Appointment approved.</strong> Present this QR code to security during the valid time window.",
+            checked_in: "<strong>You are checked in.</strong> Location tracking is active for this visit.",
+            rejected: "<strong>Appointment declined.</strong> Check the office response before requesting another schedule.",
+            unanswered: "<strong>The office did not respond in time.</strong> Please request another appointment.",
+            cancelled: "<strong>Appointment cancelled.</strong> You may create another appointment.",
+            window_closed: "<strong>Appointment done.</strong> The visitor pass has expired.",
+            completed: "<strong>Visit complete.</strong> The visitor pass is no longer active.",
+        };
+        if (appointmentStateMessage) {
+            appointmentStateMessage.innerHTML = messages[normalizedStatus] || messages.pending_approval;
+        }
+        if (checkInHint) {
+            if (normalizedStatus === "approved") {
+                checkInHint.textContent = "The QR becomes scannable 30 minutes before your appointment and remains valid until its scheduled end.";
+            } else if (normalizedStatus === "checked_in") {
+                checkInHint.textContent = "Security checked you in. GPS tracking has started.";
+            } else {
+                checkInHint.textContent = "A QR visitor pass is available only after office approval.";
+            }
+        }
+    }
+
+    function showAppointmentQr(token, status) {
         const normalized = normalizeToken(token);
         if (normalized.length !== 64) {
             return;
@@ -177,20 +244,7 @@
         if (appointmentSuccess) {
             appointmentSuccess.hidden = false;
         }
-        if (tokenDisplay) {
-            tokenDisplay.textContent = normalized;
-        }
-        if (qrHost && typeof QRCode !== "undefined") {
-            qrHost.innerHTML = "";
-            new QRCode(qrHost, {
-                text: normalized,
-                width: 200,
-                height: 200,
-            });
-        }
-        if (checkInHint) {
-            checkInHint.textContent = "Waiting for security check-in scan.";
-        }
+        renderAppointmentState(status, normalized);
         if (visitCompleteNotice) {
             visitCompleteNotice.hidden = true;
         }
@@ -275,33 +329,65 @@
                     "</span>" +
                     "</span>";
                 infoBtn.addEventListener("click", function () {
-                    showAppointmentQr(item.public_token || "");
+                    showAppointmentQr(item.public_token || "", item.status);
                     closeMenu();
                 });
 
-                const removeBtn = document.createElement("button");
-                removeBtn.type = "button";
-                removeBtn.className = "button-danger button-small";
-                removeBtn.textContent = "Delete";
-                removeBtn.addEventListener("click", function (ev) {
-                    ev.stopPropagation();
-                    if (!window.confirm("Delete this appointment?")) {
-                        return;
-                    }
-                    deleteAppointment(item.id).then(function (ok) {
-                        if (ok) {
-                            loadMyAppointments();
+                const cancellableStatuses = ["pending_approval", "approved", "reschedule_proposed"];
+                let removeBtn = null;
+                if (cancellableStatuses.indexOf(item.status) !== -1) {
+                    removeBtn = document.createElement("button");
+                    removeBtn.type = "button";
+                    removeBtn.className = "button-danger button-small";
+                    removeBtn.textContent = "Cancel";
+                    removeBtn.addEventListener("click", function (ev) {
+                        ev.stopPropagation();
+                        if (!window.confirm("Cancel this appointment? It will remain in your appointment history.")) {
+                            return;
                         }
+                        deleteAppointment(item.id).then(function (ok) {
+                            if (ok) {
+                                loadMyAppointments();
+                            }
+                        });
                     });
-                });
+                }
 
                 row.appendChild(infoBtn);
-                row.appendChild(removeBtn);
+                if (removeBtn) {
+                    row.appendChild(removeBtn);
+                }
                 appointmentsList.appendChild(row);
             });
         } catch (error) {
             appointmentsList.innerHTML = '<p class="login-error">Could not reach the server.</p>';
         }
+    }
+
+    function distanceMeters(a, b) {
+        const toRad = Math.PI / 180;
+        const dLat = (b.latitude - a.latitude) * toRad;
+        const dLng = (b.longitude - a.longitude) * toRad;
+        const h = Math.sin(dLat / 2) ** 2
+            + Math.cos(a.latitude * toRad) * Math.cos(b.latitude * toRad) * Math.sin(dLng / 2) ** 2;
+        return 2 * 6371000 * Math.asin(Math.sqrt(h));
+    }
+
+    // GPS readings wander by several metres even when the phone is still. Keep reporting the
+    // last accepted position until the phone has moved further than the reading's accuracy radius.
+    function stabilize(coords) {
+        const accuracy = Number.isFinite(coords.accuracy) ? coords.accuracy : Infinity;
+        const current = { latitude: coords.latitude, longitude: coords.longitude, accuracy: accuracy };
+        const previous = anchorPosition;
+        const moved = previous !== null
+            && accuracy <= MAX_MOVEMENT_ACCURACY_METERS
+            && distanceMeters(previous, current) > Math.max(MIN_MOVEMENT_METERS, accuracy);
+        const sharper = previous !== null && accuracy < previous.accuracy / 2;
+        if (previous === null || moved || sharper) {
+            anchorPosition = current;
+            return current;
+        }
+        return previous;
     }
 
     function startWatch() {
@@ -320,6 +406,7 @@
         setTrackingStatus("starting...");
         watchId = navigator.geolocation.watchPosition(
             async function (position) {
+                const reported = stabilize(position.coords);
                 try {
                     const response = await fetch("save_location.php", {
                         method: "POST",
@@ -327,9 +414,9 @@
                         body: JSON.stringify({
                             appointment_token: currentAppointmentToken,
                             device_name: trackedDeviceName || "My Phone",
-                            latitude: position.coords.latitude,
-                            longitude: position.coords.longitude,
-                            accuracy: position.coords.accuracy,
+                            latitude: reported.latitude,
+                            longitude: reported.longitude,
+                            accuracy: Number.isFinite(reported.accuracy) ? reported.accuracy : null,
                         }),
                     });
                     const result = await response.json();
@@ -353,6 +440,7 @@
         if (watchId !== null && navigator.geolocation) {
             navigator.geolocation.clearWatch(watchId);
             watchId = null;
+            anchorPosition = null;
         }
         autoStarted = false;
         if (locationPollTimer) {
@@ -391,6 +479,7 @@
                 if (data.device_name) {
                     trackedDeviceName = data.device_name;
                 }
+                renderAppointmentState(data.status, token);
                 if (data.completed) {
                     if (checkInHint) {
                         checkInHint.textContent = "Your visit has been completed by security.";
@@ -419,8 +508,8 @@
 
     if (appointmentAtInput) {
         const now = new Date();
-        const todayIso = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-        appointmentAtInput.min = todayIso;
+        const localNow = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        appointmentAtInput.min = localNow;
     }
 
     if (appointmentForm) {
@@ -436,10 +525,11 @@
             const visitorEmail = document.getElementById("visitorEmail").value.trim();
             const appointmentAt = appointmentAtInput ? appointmentAtInput.value : "";
             const deviceNameAppt = document.getElementById("deviceNameAppt").value.trim();
+            const visitorConsent = document.getElementById("visitorConsent");
 
-            if (!officeCode || !visitorFullName || !appointmentAt) {
+            if (!officeCode || !visitorFullName || !appointmentAt || !visitorConsent.checked) {
                 if (appointmentError) {
-                    appointmentError.textContent = "Fill in office, name, and visit date.";
+                    appointmentError.textContent = "Fill in the required fields and confirm the tracking consent.";
                     appointmentError.hidden = false;
                 }
                 return;
@@ -454,8 +544,11 @@
                     office_code: officeCode,
                     visitor_full_name: visitorFullName,
                     visitor_email: visitorEmail,
+                    scheduled_start_at: appointmentAt,
                     appointment_at: appointmentAt,
                     device_name: deviceNameAppt,
+                    consent_granted: true,
+                    consent_version: "2026-09-18",
                 }),
             })
                 .then(function (r) {
@@ -482,7 +575,7 @@
                     if (data.device_name) {
                         trackedDeviceName = data.device_name;
                     }
-                    showAppointmentQr(token);
+                    showAppointmentQr(token, data.status || "pending_approval");
                 })
                 .catch(function () {
                     if (appointmentError) {
@@ -526,6 +619,10 @@
             }
             if (qrHost) {
                 qrHost.innerHTML = "";
+                qrHost.hidden = true;
+            }
+            if (tokenLine) {
+                tokenLine.hidden = true;
             }
             if (checkInHint) {
                 checkInHint.textContent = "Waiting for security check-in scan.";
@@ -559,7 +656,7 @@
     const savedToken = normalizeToken(sessionStorage.getItem(APPT_TOKEN_KEY) || "");
     if (savedToken.length === 64) {
         currentAppointmentToken = savedToken;
-        showAppointmentQr(savedToken);
+        showAppointmentQr(savedToken, "pending_approval");
         fetch("appointment_status.php?token=" + encodeURIComponent(savedToken), {
             credentials: "same-origin",
         })
@@ -568,6 +665,7 @@
             })
             .then(function (data) {
                 if (data && data.success) {
+                    renderAppointmentState(data.status, savedToken);
                     if (data.device_name) {
                         trackedDeviceName = data.device_name;
                     }

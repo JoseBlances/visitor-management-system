@@ -2,6 +2,7 @@
 header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/visit_service.php";
 
 if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     http_response_code(405);
@@ -21,6 +22,33 @@ $appointmentId = (int) $input["id"];
 $securityUserId = (int) $_SESSION["user_id"];
 if ($appointmentId <= 0) {
     echo json_encode(["success" => false, "message" => "Invalid appointment"]);
+    exit;
+}
+
+// Ending any stop of a multi-stop visit is a gate checkout for the whole visit.
+$visit = visit_for_appointment($conn, $appointmentId);
+if ($visit) {
+    $conn->begin_transaction();
+    try {
+        $locked = visit_load($conn, (int) $visit["id"], true);
+        if (!$locked || $locked["status"] !== "checked_in") {
+            throw new DomainException("Visit is not active or already completed");
+        }
+        visit_complete($conn, $locked, $securityUserId, "Visit ended by security", null, true);
+        $conn->commit();
+    } catch (DomainException $error) {
+        $conn->rollback();
+        $conn->close();
+        echo json_encode(["success" => false, "message" => $error->getMessage()]);
+        exit;
+    } catch (Throwable $error) {
+        $conn->rollback();
+        $conn->close();
+        echo json_encode(["success" => false, "message" => "Could not end the visit"]);
+        exit;
+    }
+    $conn->close();
+    echo json_encode(["success" => true, "message" => "Visit marked as complete"]);
     exit;
 }
 
@@ -62,6 +90,58 @@ if ($hist) {
     $hist->bind_param("ii", $appointmentId, $securityUserId);
     $hist->execute();
     $hist->close();
+}
+
+// Phase 4 mobile tracking sessions are optional on older installations. When the
+// migration is present, completion immediately closes the app's active session.
+$tracking = false;
+try {
+    $tracking = $conn->prepare(
+        "UPDATE location_tracking_sessions
+         SET ended_at = COALESCE(ended_at, NOW()), ended_reason = 'completed'
+         WHERE appointment_id = ? AND ended_at IS NULL"
+    );
+} catch (Throwable $ignored) {
+    // Preserve the legacy web workflow until mobile_api_migration.sql is installed.
+}
+if ($tracking) {
+    $tracking->bind_param("i", $appointmentId);
+    $tracking->execute();
+    $tracking->close();
+}
+
+$visitorLookup = $conn->prepare("SELECT visitor_user_id FROM appointments WHERE id = ? LIMIT 1");
+if ($visitorLookup) {
+    $visitorLookup->bind_param("i", $appointmentId);
+    $visitorLookup->execute();
+    $visitorRow = $visitorLookup->get_result()->fetch_assoc();
+    $visitorLookup->close();
+    if ($visitorRow) {
+        $visitorUserId = (int) $visitorRow["visitor_user_id"];
+        $notification = $conn->prepare(
+            "INSERT INTO app_notifications
+             (recipient_user_id, appointment_id, notification_type, title, message)
+             VALUES (?, ?, 'appointment.completed', 'Visit completed', 'Security completed your campus visit. Location tracking has stopped.')"
+        );
+        if ($notification) {
+            $notification->bind_param("ii", $visitorUserId, $appointmentId);
+            $notification->execute();
+            $notification->close();
+        }
+    }
+}
+
+$audit = $conn->prepare(
+    "INSERT INTO audit_logs
+     (actor_user_id, appointment_id, action, entity_type, entity_id, details_json, ip_address)
+     VALUES (?, ?, 'appointment.completed', 'appointment', ?, '{}', ?)"
+);
+if ($audit) {
+    $entityId = (string) $appointmentId;
+    $ipAddress = isset($_SERVER["REMOTE_ADDR"]) ? substr((string) $_SERVER["REMOTE_ADDR"], 0, 45) : "";
+    $audit->bind_param("iiss", $securityUserId, $appointmentId, $entityId, $ipAddress);
+    $audit->execute();
+    $audit->close();
 }
 $conn->close();
 
