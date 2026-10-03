@@ -87,7 +87,7 @@ function mobile_create_visit(mysqli $conn, array $user, array $input): array
         $errors["location_consent"] = "Location consent and its displayed policy version are required";
     }
 
-    $offices = appointment_office_map();
+    $offices = appointment_office_active_map();
     $now = new DateTime("now");
     $stops = [];
     $seenOffices = [];

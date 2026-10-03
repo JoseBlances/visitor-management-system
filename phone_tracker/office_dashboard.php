@@ -6,8 +6,9 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/appointment_maintenance.php";
+require_once __DIR__ . "/personnel.php";
 
-require_roles_json(["offices"]);
+require_permission_json("office.dashboard");
 refresh_appointment_time_states($conn);
 
 $officeCode = strtoupper(trim((string) ($_SESSION["office_code"] ?? "")));
@@ -24,8 +25,9 @@ $profile = [
     "display_name" => (string) ($_SESSION["display_name"] ?? ""),
     "profile_image_url" => "",
 ];
+$positionColumn = personnel_schema_ready($conn) ? ", position" : "";
 $profileStmt = $conn->prepare(
-    "SELECT username, display_name, profile_image FROM app_users WHERE id = ? LIMIT 1"
+    "SELECT username, display_name, profile_image{$positionColumn} FROM app_users WHERE id = ? LIMIT 1"
 );
 if ($profileStmt) {
     $profileStmt->bind_param("i", $userId);
@@ -35,6 +37,7 @@ if ($profileStmt) {
         $profile = [
             "username" => (string) $profileRow["username"],
             "display_name" => (string) $profileRow["display_name"],
+            "position" => (string) ($profileRow["position"] ?? ""),
             "profile_image_url" => $profileRow["profile_image"] ? (string) $profileRow["profile_image"] : "",
         ];
         $_SESSION["display_name"] = $profile["display_name"];

@@ -11,7 +11,7 @@ if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     exit;
 }
 
-require_roles_json(["visitor"]);
+require_permission_json("appointments.book");
 
 $input = json_decode(file_get_contents("php://input"), true);
 if (!is_array($input)) {
@@ -58,7 +58,7 @@ if ($startRaw === "") {
 }
 $endRaw = appointment_input($input, "scheduled_end_at");
 
-$offices = appointment_office_map();
+$offices = appointment_office_active_map();
 if ($officeCode === "" || !isset($offices[$officeCode])) {
     echo json_encode(["success" => false, "message" => "Select a valid office"]);
     exit;

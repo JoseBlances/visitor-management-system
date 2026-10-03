@@ -8,6 +8,7 @@ machine-specific Android settings, database backups, and build output.
 
 - `phone_tracker/config/firebase-service-account.json`
 - `phone_tracker/config/mobile_api.php`
+- `phone_tracker/config/auth.php` and `phone_tracker/config/auth_secret.php`
 - `visitor_app/local.properties`
 - Android signing keys (`*.jks`, `*.keystore`, and `keystore.properties`)
 - `.backups/`, `.gradle-user/`, `debug.log`, and generated `build/` directories
@@ -35,10 +36,16 @@ JSON for this Android client file.
    - `phone_tracker/app_users_profile_migration.sql`
    - `phone_tracker/mobile_api_migration.sql`
    - `phone_tracker/multi_stop_visits_migration.sql`
+   - `phone_tracker/campus_map_migration.sql`
+   - `phone_tracker/auth_security_migration.sql`
+   - `phone_tracker/personnel_directory_migration.sql`
 
    An existing database only needs the files it is missing. Every migration can be run
-   again safely.
-6. Open `http://localhost/visitor-management-system/` and test the staff website.
+   again safely. Do not import `app_users_office_code_migration.sql`,
+   `appointments_status_migration.sql`, or `phase1_workflow_migration.sql` into a new
+   database; they only upgrade databases created before those changes.
+6. Open `http://localhost/visitor-management-system/` and test the staff website. The
+   first sign-in is different now; see **Sign-in security** below.
 7. In Android Studio, open the `visitor_app` folder, not the repository root.
 8. Allow Android Studio to create `visitor_app/local.properties` and complete Gradle
    sync.
@@ -48,6 +55,41 @@ JSON for this Android client file.
 Only the computer that runs the PHP push worker needs the server service-account key
 and `phone_tracker/config/mobile_api.php`. Ordinary Android testers do not need either
 server secret.
+
+## Sign-in security
+
+The full design is in `AUTH_SECURITY.md`. What you will notice:
+
+- The seeded `admin`, `security`, and `offices` accounts still start with the password
+  `password`, but each must choose a new password at its first sign-in.
+- Admin accounts must set up two-step verification at their first sign-in. Install
+  Google Authenticator or Microsoft Authenticator on your phone, scan the QR code, and
+  save the 10 backup codes it shows. Security and Office accounts can turn it on under
+  **Profile menu → Account security**.
+- New accounts get a one-time temporary password from **User Management → Add user**.
+  It expires after 24 hours; the user picks their own password when they sign in.
+- Five wrong attempts on one account from one device pause sign-in there for
+  10 minutes (longer on repeats). An admin can unlock it on the **Security** page.
+- Sessions end after 30 minutes without activity and after 12 hours in total.
+
+Development machines only: to skip the admin authenticator step locally, copy
+`phone_tracker/config/auth.example.php` to `phone_tracker/config/auth.php` and set
+`"two_factor_required_roles" => []`. Never do this on the deployed server, and never
+commit `auth.php`.
+
+If nobody can sign in as an administrator (for example a lost phone and lost backup
+codes), run one of these on the computer that hosts XAMPP:
+
+```powershell
+C:\xampp\php\php.exe phone_tracker\tools\auth_recovery.php unlock admin
+C:\xampp\php\php.exe phone_tracker\tools\auth_recovery.php reset-2fa admin
+C:\xampp\php\php.exe phone_tracker\tools\auth_recovery.php reset-password admin
+```
+
+`phone_tracker/config/auth_secret.php` is created automatically the first time someone
+sets up two-step verification. It encrypts the authenticator secrets: keep it private,
+back it up with the server, and never commit it. If it is lost, authenticator codes
+stop working (backup codes and the recovery commands above still work).
 
 ## Create one Office Personnel account per destination
 
@@ -61,6 +103,11 @@ tested:
 - CS Department (`CS`)
 - Dean's Office (`DEANS`)
 - Tech Support (`TECH_SUPPORT`)
+
+These five are the starting departments. Administrators add, rename, archive, or delete
+departments in **User Management → Department Directory**; new departments appear in the
+visitor app, the booking page, and the campus map automatically. Every account needs the
+real first and last name of the person using it; see `ACCOUNTABILITY.md`.
 
 When testing an appointment, sign into the Office dashboard with the account assigned
 to the same destination selected in the visitor app. Do not solve missing requests by

@@ -7,7 +7,7 @@ require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/analytics_period.php";
 require_once __DIR__ . "/campus_map_service.php";
 
-require_admin_json();
+require_permission_json("analytics.view");
 
 // Match the local MySQL/system clock used by the ISATU installation.
 date_default_timezone_set("Asia/Manila");

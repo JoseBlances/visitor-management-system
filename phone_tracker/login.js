@@ -1,0 +1,673 @@
+/*
+ * Sign-in page: username/password, then any extra steps the server asks for
+ * (two-step code, new password, two-step setup, backup codes), with a
+ * 5-second "authenticating" sequence: four checks of 1.1 s and a 0.6 s finish.
+ * The server decides everything; this file only presents each step.
+ */
+(function () {
+    "use strict";
+
+    const ROLE_HOME = {
+        admin: "admin.html?v=20261003-3",
+        security: "dashboard.html?v=20261003-2",
+        offices: "offices.html?v=20261003-2",
+        visitor: "index.html?v=20261003-2",
+    };
+    const ROLE_PLACE = {
+        admin: "the Admin dashboard",
+        security: "the Security dashboard",
+        offices: "the Office dashboard",
+        visitor: "your visitor page",
+    };
+    const STEP_MS = 1100;
+    const SUCCESS_MS = 600;
+    const FAIL_MS = 950;
+    const RING_LENGTH = 2 * Math.PI * 52;
+
+    const UI = window.PhoneTrackerAuthUI;
+    const Auth = window.PhoneTrackerAuth;
+    const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const $ = function (id) { return document.getElementById(id); };
+    const card = $("authCard");
+    const panels = {
+        signin: $("signInPanel"),
+        progress: $("progressPanel"),
+        twoFactor: $("twoFactorPanel"),
+        password: $("passwordPanel"),
+        setup: $("setupPanel"),
+        backup: $("backupPanel"),
+    };
+    const loginForm = $("loginForm");
+    const usernameInput = $("loginEmail");
+    const passwordInput = $("loginPassword");
+    const signInBtn = $("signInBtn");
+    const loginMessage = $("loginMessage");
+    const attemptsHint = $("attemptsHint");
+
+    let busy = false;
+
+    function wait(ms) {
+        return new Promise(function (resolve) { window.setTimeout(resolve, ms); });
+    }
+
+    function showMessage(element, message, state) {
+        element.textContent = message || "";
+        element.hidden = !message;
+        element.dataset.state = state || "error";
+    }
+
+    function showNotice(message, tone) {
+        const notice = $("authNotice");
+        $("authNoticeText").textContent = message || "";
+        notice.dataset.tone = tone || "info";
+        notice.hidden = !message;
+    }
+
+    function api(url, body, method) {
+        const options = { method: method || "POST", credentials: "same-origin", cache: "no-store" };
+        if (body) {
+            options.headers = { "Content-Type": "application/json" };
+            options.body = JSON.stringify(body);
+        }
+        return fetch(url, options).then(function (response) {
+            return response.json().catch(function () { return null; }).then(function (data) {
+                return { status: response.status, data: data || {} };
+            });
+        }, function () {
+            return { status: 0, data: {} };
+        });
+    }
+
+    function submitForm(form) {
+        if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+        } else {
+            form.dispatchEvent(new Event("submit", { cancelable: true }));
+        }
+    }
+
+    function showPanel(name) {
+        Object.keys(panels).forEach(function (key) {
+            panels[key].hidden = key !== name;
+        });
+        const panel = panels[name];
+        panel.classList.remove("is-entering");
+        void panel.offsetWidth;
+        panel.classList.add("is-entering");
+        const heading = panel.querySelector("[tabindex='-1']");
+        if (heading && name !== "signin") {
+            heading.focus({ preventScroll: true });
+        }
+    }
+
+    /* ---------- The authenticating sequence ---------- */
+
+    const progress = (function () {
+        const ring = $("progressRing");
+        const bar = $("progressBar");
+        const title = $("progressTitle");
+        const subtitle = $("progressSubtitle");
+        const live = $("progressLive");
+        const steps = Array.from(document.querySelectorAll("#progressSteps li"));
+        const defaults = steps.map(function (step) { return step.querySelector("small").textContent; });
+        bar.style.strokeDasharray = String(RING_LENGTH);
+
+        function setRing(fraction, duration) {
+            bar.style.transitionDuration = (reduceMotion ? 0 : duration) + "ms";
+            bar.style.strokeDashoffset = String(RING_LENGTH * (1 - fraction));
+        }
+
+        function setStep(index, state, detail) {
+            const step = steps[index];
+            step.dataset.state = state;
+            if (detail) {
+                step.querySelector("small").textContent = detail;
+            }
+        }
+
+        return {
+            reset: function (completed) {
+                ring.dataset.state = "working";
+                steps.forEach(function (step, index) {
+                    step.dataset.state = index < (completed || 0) ? "done" : "pending";
+                    step.querySelector("small").textContent = defaults[index];
+                });
+                setRing((completed || 0) / steps.length, 0);
+                title.textContent = "Authenticating";
+                subtitle.textContent = "Hold on while we secure your sign-in";
+            },
+            run: function (index, detail) {
+                setStep(index, "active", detail);
+                live.textContent = steps[index].querySelector("strong").textContent;
+                setRing((index + 1) / steps.length, STEP_MS);
+                return wait(STEP_MS);
+            },
+            done: function (index, detail) {
+                setStep(index, "done", detail);
+            },
+            info: function (index, detail) {
+                setStep(index, "info", detail);
+                live.textContent = detail;
+            },
+            subtitle: function (text) {
+                subtitle.textContent = text;
+            },
+            fail: function (index, kind, heading, detail) {
+                setStep(index, "failed", detail);
+                ring.dataset.state = kind;
+                title.textContent = heading;
+                subtitle.textContent = detail;
+                live.textContent = heading + ". " + detail;
+                card.classList.remove("is-shaking");
+                void card.offsetWidth;
+                if (!reduceMotion) {
+                    card.classList.add("is-shaking");
+                }
+            },
+            success: function (heading, detail) {
+                ring.dataset.state = "success";
+                setRing(1, 200);
+                title.textContent = heading;
+                if (detail) {
+                    subtitle.textContent = detail;
+                }
+                live.textContent = heading;
+            },
+        };
+    })();
+
+    /* ---------- Sign-in form ---------- */
+
+    UI.bindPasswordToggles(document);
+
+    const capsLockHint = $("capsLockHint");
+    ["keydown", "keyup"].forEach(function (name) {
+        passwordInput.addEventListener(name, function (event) {
+            if (event.getModifierState) {
+                capsLockHint.hidden = !event.getModifierState("CapsLock");
+            }
+        });
+    });
+    passwordInput.addEventListener("blur", function () {
+        capsLockHint.hidden = true;
+    });
+
+    let lockState = null;
+    function renderLock() {
+        const left = lockState ? Math.ceil((lockState.until - Date.now()) / 1000) : 0;
+        const appliesHere = lockState && (lockState.scope !== "account_device"
+            || usernameInput.value.trim().toLowerCase() === lockState.username);
+        if (lockState && left <= 0) {
+            window.clearInterval(lockState.timer);
+            lockState = null;
+            showMessage(loginMessage, "You can try again now.", "success");
+        }
+        $("lockBanner").hidden = !lockState || !appliesHere;
+        signInBtn.disabled = Boolean(lockState && appliesHere);
+        if (lockState) {
+            $("lockCountdown").textContent = UI.formatCountdown(left);
+        }
+    }
+
+    function startLock(seconds, message, scope) {
+        if (lockState) {
+            window.clearInterval(lockState.timer);
+        }
+        lockState = {
+            until: Date.now() + Math.max(1, Number(seconds) || 600) * 1000,
+            scope: scope || "account_device",
+            username: usernameInput.value.trim().toLowerCase(),
+            timer: window.setInterval(renderLock, 1000),
+        };
+        $("lockTitle").textContent = scope === "ip" ? "Sign-in paused on this network" : "Sign-in paused";
+        $("lockText").textContent = message || "Too many failed attempts.";
+        attemptsHint.hidden = true;
+        loginMessage.hidden = true;
+        renderLock();
+    }
+    usernameInput.addEventListener("input", renderLock);
+
+    function showAttempts(data) {
+        const left = data.attempts_remaining;
+        if (typeof left !== "number" || left <= 0 || left > 2) {
+            attemptsHint.hidden = true;
+            return;
+        }
+        attemptsHint.textContent = (left === 1 ? "1 attempt" : left + " attempts")
+            + " left before sign-in is paused for " + UI.formatMinutes(data.next_lock_minutes || 10) + ".";
+        attemptsHint.hidden = false;
+    }
+
+    function returnToSignIn() {
+        showPanel("signin");
+        progress.reset(0);
+        resetStepPanels();
+        passwordInput.value = "";
+        window.setTimeout(function () {
+            (usernameInput.value ? passwordInput : usernameInput).focus();
+        }, 40);
+    }
+
+    loginForm.addEventListener("submit", async function (event) {
+        event.preventDefault();
+        if (busy || signInBtn.disabled) {
+            return;
+        }
+        showMessage(loginMessage, "");
+        attemptsHint.hidden = true;
+        const username = usernameInput.value.trim();
+        const password = passwordInput.value;
+        if (!username || !password) {
+            showMessage(loginMessage, "Enter your username or email and your password.");
+            (username ? passwordInput : usernameInput).focus();
+            return;
+        }
+
+        busy = true;
+        showNotice("");
+        showPanel("progress");
+        progress.reset(0);
+        const outcome = await Promise.all([api("login.php", { username: username, password: password }), progress.run(0)]);
+        await route(outcome[0], "signin");
+        busy = false;
+    });
+
+    /* ---------- Routing the server's answer ---------- */
+
+    async function route(result, origin) {
+        const data = result.data || {};
+        if (data.status === "authenticated") {
+            return completeSignIn(data, origin);
+        }
+        const steps = {
+            two_factor_required: ["twoFactor", "Two-step verification required"],
+            password_change_required: ["password", data.reason === "temporary" ? "A new password is required" : "Your password must be updated"],
+            two_factor_setup_required: ["setup", "Two-step verification must be set up"],
+        };
+        if (steps[data.status]) {
+            if (origin === "signin") {
+                progress.done(0, "Credentials accepted");
+                progress.info(1, steps[data.status][1]);
+                await wait(reduceMotion ? 350 : 850);
+            }
+            openStep(steps[data.status][0], data);
+            return undefined;
+        }
+        return origin === "signin" ? signInFailed(result) : stepFailed(result);
+    }
+
+    async function signInFailed(result) {
+        const data = result.data || {};
+        const code = data.code || (result.status === 0 ? "network" : "error");
+        const short = {
+            locked: "Too many failed attempts",
+            invalid_credentials: "Incorrect username or password",
+            temporary_password_expired: "Temporary password expired",
+            network: "Can't reach the server",
+            migration_required: "The database needs an update",
+        };
+        progress.fail(0, code === "locked" ? "locked" : "error", code === "locked" ? "Sign-in paused" : "Sign-in failed", short[code] || "Please try again");
+        await wait(FAIL_MS);
+        returnToSignIn();
+        if (code === "locked") {
+            startLock(data.retry_after, data.message, data.lock_scope);
+            return;
+        }
+        const message = code === "network"
+            ? "Can't reach the server. Check that XAMPP is running and you're on the right network."
+            : (data.message || "Sign-in failed. Please try again.");
+        showMessage(loginMessage, message);
+        if (code === "invalid_credentials") {
+            showAttempts(data);
+        }
+    }
+
+    function stepFailed(result, context) {
+        const data = result.data || {};
+        if (data.code === "pending_expired" || data.code === "locked") {
+            returnToSignIn();
+            if (data.code === "locked") {
+                startLock(data.retry_after, data.message, data.lock_scope);
+            } else {
+                showNotice(data.message || "Your sign-in timed out. Please start again.", "warning");
+            }
+            return;
+        }
+        let message = data.message || (result.status === 0 ? "Can't reach the server. Please try again." : "Something went wrong. Please try again.");
+        if (typeof data.attempts_remaining === "number" && data.attempts_remaining > 0 && data.attempts_remaining <= 2) {
+            message += " " + (data.attempts_remaining === 1 ? "1 attempt" : data.attempts_remaining + " attempts")
+                + " left before sign-in is paused for " + UI.formatMinutes(data.next_lock_minutes || 10) + ".";
+        }
+        if (context) {
+            showMessage(context.message, message);
+            if (context.otp) {
+                context.otp.invalid();
+                context.otp.focus();
+            }
+        }
+    }
+
+    async function completeSignIn(data, origin) {
+        Auth.setSessionFromLogin(data);
+        if (Array.isArray(data.backup_codes) && data.backup_codes.length) {
+            await showBackupCodes(data.backup_codes, data.username);
+            origin = "step";
+        }
+        if (origin !== "signin") {
+            showPanel("progress");
+            progress.reset(1);
+        }
+        progress.done(0, "Credentials accepted");
+
+        const methodDetail = {
+            "password+authenticator": "Two-step verification passed",
+            "password+backup_code": "Verified with a backup code",
+            "password+trusted_device": "Trusted browser recognized",
+        };
+        await progress.run(1);
+        progress.done(1, methodDetail[data.auth_method] || "No lockouts on this account");
+        const notes = [];
+        if (data.previous_login && data.previous_login.at) {
+            notes.push("Last sign-in " + UI.formatDateTime(data.previous_login.at) + (data.previous_login.ip ? " from " + UI.formatIp(data.previous_login.ip) : ""));
+        }
+        if (typeof data.backup_codes_remaining === "number") {
+            notes.push(data.backup_codes_remaining + (data.backup_codes_remaining === 1 ? " backup code left" : " backup codes left"));
+        }
+        if (notes.length) {
+            progress.subtitle(notes.join(" · "));
+        }
+
+        await progress.run(2);
+        progress.done(2, "Protected session created");
+        await progress.run(3, "Opening " + (ROLE_PLACE[data.role] || "your dashboard"));
+        progress.done(3, "Ready");
+        progress.success("Welcome back, " + (data.display_name || data.username), notes.length ? "" : "Signing you in");
+        await wait(SUCCESS_MS);
+        window.location.replace(ROLE_HOME[data.role] || data.redirect || "index.html");
+    }
+
+    /* ---------- Step panels ---------- */
+
+    const totp = UI.bindOtpInput($("totpCode"), document.querySelector("#totpGroup .auth-otp-slots"), function () {
+        submitForm($("twoFactorForm"));
+    });
+    const setupOtp = UI.bindOtpInput($("setupCode"), document.querySelector("#setupCodeGroup .auth-otp-slots"), function () {
+        submitForm($("setupForm"));
+    });
+    const passwordState = { policy: null, identity: {} };
+    const feedback = UI.bindPasswordFeedback({
+        input: $("newPassword"),
+        confirm: $("confirmPassword"),
+        meter: $("strengthMeter"),
+        label: $("strengthLabel"),
+        rules: $("passwordRules"),
+        getPolicy: function () { return passwordState.policy; },
+        getIdentity: function () { return passwordState.identity; },
+    });
+
+    let backupMode = false;
+    function setBackupMode(enabled) {
+        backupMode = enabled;
+        $("totpGroup").hidden = enabled;
+        $("backupCodeField").hidden = !enabled;
+        $("toggleBackupBtn").textContent = enabled ? "Use the authenticator app instead" : "Use a backup code instead";
+        $("twoFactorIntro").textContent = enabled
+            ? "Enter one of the backup codes you saved when you set up two-step verification."
+            : "Open your authenticator app and enter the 6-digit code for ISATU Visitor Management.";
+        showMessage($("twoFactorMessage"), "");
+        window.setTimeout(function () {
+            if (enabled) {
+                $("backupCode").focus();
+            } else {
+                totp.focus();
+            }
+        }, 30);
+    }
+    $("toggleBackupBtn").addEventListener("click", function () {
+        setBackupMode(!backupMode);
+    });
+
+    // An error stays only until the user changes what it was about.
+    [
+        ["loginEmail", "loginMessage"],
+        ["loginPassword", "loginMessage"],
+        ["totpCode", "twoFactorMessage"],
+        ["backupCode", "twoFactorMessage"],
+        ["newPassword", "passwordMessage"],
+        ["confirmPassword", "passwordMessage"],
+        ["setupCode", "setupMessage"],
+    ].forEach(function (pair) {
+        $(pair[0]).addEventListener("input", function () {
+            showMessage($(pair[1]), "");
+        });
+    });
+
+    function resetStepPanels() {
+        totp.clear();
+        setupOtp.clear();
+        $("backupCode").value = "";
+        $("newPassword").value = "";
+        $("confirmPassword").value = "";
+        $("trustDevice").checked = false;
+        feedback.update();
+        ["twoFactorMessage", "passwordMessage", "setupMessage"].forEach(function (id) {
+            showMessage($(id), "");
+        });
+        if (backupMode) {
+            setBackupMode(false);
+        }
+    }
+
+    function openStep(name, data) {
+        if (name === "twoFactor") {
+            showPanel("twoFactor");
+            setBackupMode(false);
+            return;
+        }
+        if (name === "password") {
+            passwordState.policy = data.policy || null;
+            passwordState.identity = { username: data.username, email: data.email, display_name: data.display_name };
+            $("passwordUsername").value = data.username || "";
+            $("passwordIntro").textContent = data.reason === "temporary"
+                ? "You signed in with a temporary password. Choose your own password to continue."
+                : "This account still uses the default password. Choose a new password only you know.";
+            feedback.update();
+            showPanel("password");
+            window.setTimeout(function () { $("newPassword").focus(); }, 30);
+            return;
+        }
+        $("setupIntro").textContent = data.role === "admin"
+            ? "Administrator accounts need a code from an authenticator app each time they sign in."
+            : "Your account needs a code from an authenticator app each time you sign in.";
+        showPanel("setup");
+        loadSetup();
+    }
+
+    async function loadSetup() {
+        $("setupSecret").textContent = "····";
+        $("setupQr").hidden = false;
+        $("setupQrFallback").hidden = true;
+        $("setupBtn").disabled = true;
+        const result = await api("login_two_factor_setup.php", null, "GET");
+        if (!result.data.success) {
+            stepFailed(result, { message: $("setupMessage") });
+            return;
+        }
+        $("setupSecret").textContent = result.data.secret;
+        $("setupAccount").textContent = result.data.account;
+        $("setupBtn").disabled = false;
+        const drawn = await UI.renderQr($("setupQr"), result.data.otpauth_uri);
+        if (!drawn) {
+            $("setupQr").hidden = true;
+            $("setupQrFallback").hidden = false;
+            $("setupManualKey").open = true;
+        }
+        setupOtp.focus();
+    }
+
+    $("copySecretBtn").addEventListener("click", function () {
+        const button = this;
+        UI.copyText($("setupSecret").textContent.replace(/\s+/g, "")).then(function (copied) {
+            button.textContent = copied ? "Copied" : "Copy failed";
+            window.setTimeout(function () { button.textContent = "Copy"; }, 1800);
+        });
+    });
+
+    function withButton(button, label, task) {
+        const original = button.textContent;
+        button.disabled = true;
+        button.textContent = label;
+        return Promise.resolve().then(task).finally(function () {
+            button.disabled = false;
+            button.textContent = original;
+        });
+    }
+
+    $("twoFactorForm").addEventListener("submit", function (event) {
+        event.preventDefault();
+        if (busy) {
+            return;
+        }
+        const code = backupMode ? $("backupCode").value.trim() : totp.value();
+        if (backupMode ? code === "" : code.length !== 6) {
+            showMessage($("twoFactorMessage"), backupMode ? "Enter one of your backup codes." : "Enter the 6-digit code from your app.");
+            return;
+        }
+        busy = true;
+        showMessage($("twoFactorMessage"), "");
+        withButton($("twoFactorBtn"), "Verifying…", async function () {
+            const result = await api("login_two_factor.php", {
+                method: backupMode ? "backup_code" : "totp",
+                code: code,
+                trust_device: $("trustDevice").checked,
+            });
+            if (result.data.success) {
+                await route(result, "step");
+            } else {
+                stepFailed(result, { message: $("twoFactorMessage"), otp: backupMode ? null : totp });
+            }
+        }).finally(function () { busy = false; });
+    });
+
+    $("passwordForm").addEventListener("submit", function (event) {
+        event.preventDefault();
+        if (busy) {
+            return;
+        }
+        const problem = feedback.firstProblem();
+        if (problem) {
+            showMessage($("passwordMessage"), problem);
+            return;
+        }
+        busy = true;
+        showMessage($("passwordMessage"), "");
+        withButton($("passwordBtn"), "Saving…", async function () {
+            const result = await api("login_change_password.php", {
+                new_password: $("newPassword").value,
+                confirm_password: $("confirmPassword").value,
+            });
+            if (result.data.success) {
+                await route(result, "step");
+            } else {
+                stepFailed(result, { message: $("passwordMessage") });
+            }
+        }).finally(function () { busy = false; });
+    });
+
+    $("setupForm").addEventListener("submit", function (event) {
+        event.preventDefault();
+        if (busy || $("setupBtn").disabled) {
+            return;
+        }
+        const code = setupOtp.value();
+        if (code.length !== 6) {
+            showMessage($("setupMessage"), "Enter the 6-digit code from your app.");
+            return;
+        }
+        busy = true;
+        showMessage($("setupMessage"), "");
+        withButton($("setupBtn"), "Verifying…", async function () {
+            const result = await api("login_two_factor_setup.php", { code: code });
+            if (result.data.success) {
+                await route(result, "step");
+            } else {
+                stepFailed(result, { message: $("setupMessage"), otp: setupOtp });
+            }
+        }).finally(function () { busy = false; });
+    });
+
+    function showBackupCodes(codes, account) {
+        return new Promise(function (resolve) {
+            const list = $("backupCodesList");
+            list.replaceChildren();
+            codes.forEach(function (code) {
+                const item = document.createElement("li");
+                const text = document.createElement("code");
+                text.textContent = code;
+                item.appendChild(text);
+                list.appendChild(item);
+            });
+            const continueBtn = $("continueAfterCodesBtn");
+            const savedCheck = $("savedCodesCheck");
+            savedCheck.checked = false;
+            continueBtn.disabled = true;
+            savedCheck.onchange = function () {
+                continueBtn.disabled = !savedCheck.checked;
+            };
+            $("copyCodesBtn").onclick = function () {
+                const button = this;
+                UI.copyText(UI.backupCodesText(codes, account)).then(function (copied) {
+                    button.textContent = copied ? "Copied" : "Copy failed";
+                    window.setTimeout(function () { button.textContent = "Copy codes"; }, 1800);
+                });
+            };
+            $("downloadCodesBtn").onclick = function () {
+                UI.downloadText("isatu-vms-backup-codes-" + account + ".txt", UI.backupCodesText(codes, account));
+                savedCheck.focus();
+            };
+            continueBtn.onclick = function () {
+                continueBtn.disabled = true;
+                resolve();
+            };
+            showPanel("backup");
+        });
+    }
+
+    document.querySelectorAll("[data-cancel-signin]").forEach(function (button) {
+        button.addEventListener("click", function () {
+            api("logout.php", {}).then(function () {
+                returnToSignIn();
+                showNotice("Sign-in cancelled.", "info");
+            });
+        });
+    });
+
+    /* ---------- On load ---------- */
+
+    const notice = Auth.takeNotice();
+    if (notice && notice.message) {
+        showNotice(notice.message, notice.code === "signed_out" ? "success" : "warning");
+    }
+
+    fetch("session_status.php", { credentials: "same-origin", cache: "no-store" })
+        .then(function (response) { return response.json(); })
+        .then(function (data) {
+            if (data && data.authenticated && data.role) {
+                Auth.setSessionFromLogin(data);
+                window.location.replace(ROLE_HOME[data.role] || "index.html");
+                return;
+            }
+            const reasons = {
+                idle_timeout: "You were signed out after 30 minutes of inactivity.",
+                session_expired: "Your session expired. Please sign in again.",
+                session_revoked: "Your session was ended. Please sign in again.",
+            };
+            if (!notice && data && reasons[data.reason]) {
+                showNotice(reasons[data.reason], "warning");
+            }
+        })
+        .catch(function () {});
+
+    usernameInput.focus();
+})();

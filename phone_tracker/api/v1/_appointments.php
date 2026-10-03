@@ -175,7 +175,7 @@ function mobile_create_appointment(mysqli $conn, array $user, array $input): arr
         ? $input["location_consent"] : [];
     $consentGranted = !empty($consentInput["granted"]);
     $consentVersion = trim((string) ($consentInput["version"] ?? ""));
-    $offices = appointment_office_map();
+    $offices = appointment_office_active_map();
     $errors = [];
     if (!isset($offices[$officeCode])) {
         $errors["office_code"] = "Select a valid office";

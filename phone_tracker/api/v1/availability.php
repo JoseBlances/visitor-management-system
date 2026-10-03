@@ -8,7 +8,7 @@ api_require_method("GET");
 api_require_visitor();
 $officeCode = strtoupper(trim((string) ($_GET["office_code"] ?? "")));
 $dateText = trim((string) ($_GET["date"] ?? ""));
-$officeMap = appointment_office_map();
+$officeMap = appointment_office_active_map();
 if (!isset($officeMap[$officeCode])) {
     api_fail("Select a valid office", 422);
 }

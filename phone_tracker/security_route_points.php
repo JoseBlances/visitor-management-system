@@ -5,7 +5,7 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/visit_service.php";
 
-require_roles_json(["security", "admin"]);
+require_permission_json("routes.view");
 
 $device = isset($_GET["device"]) ? trim((string) $_GET["device"]) : "";
 $date = isset($_GET["date"]) ? trim((string) $_GET["date"]) : date("Y-m-d");

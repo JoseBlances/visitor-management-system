@@ -5,8 +5,9 @@ require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/appointment_maintenance.php";
+require_once __DIR__ . "/personnel.php";
 
-require_admin_json();
+require_permission_json("dashboard.admin");
 refresh_appointment_time_states($conn);
 
 /**
@@ -70,13 +71,28 @@ $subjectSelect = appointment_column_exists($conn, "subject")
     ? "a.subject"
     : "NULL AS subject";
 
+// Who handled each appointment, by real name when it is on file.
+$personnelReady = personnel_schema_ready($conn);
+$handledBy = [];
+foreach (["ap" => "approved_by_name", "rj" => "rejected_by_name", "ci" => "checked_in_by_name", "co" => "completed_by_name"] as $alias => $column) {
+    $display = "COALESCE(NULLIF({$alias}.display_name, ''), {$alias}.username)";
+    $handledBy[] = ($personnelReady
+        ? "COALESCE(NULLIF(TRIM(CONCAT_WS(' ', {$alias}.first_name, {$alias}.last_name)), ''), {$display})"
+        : $display) . " AS " . $column;
+}
+$handledBySelect = implode(", ", $handledBy);
 $visitorSql =
     "SELECT a.id, a.visitor_full_name, a.visitor_email, a.office_code,
             a.appointment_at, a.checked_in_at, a.completed_at, a.cancelled_at,
             a.status, a.status_updated_at, a.created_at,
             {$visitTypeSelect}, {$purposeSelect}, {$subjectSelect},
-            COALESCE(a.status_updated_at, a.appointment_at, a.created_at) AS activity_at
+            COALESCE(a.status_updated_at, a.appointment_at, a.created_at) AS activity_at,
+            {$handledBySelect}
      FROM appointments a
+     LEFT JOIN app_users ap ON ap.id = a.approved_by_user_id
+     LEFT JOIN app_users rj ON rj.id = a.rejected_by_user_id
+     LEFT JOIN app_users ci ON ci.id = a.checked_in_by_user_id
+     LEFT JOIN app_users co ON co.id = a.completed_by_user_id
      ORDER BY COALESCE(a.status_updated_at, a.created_at) DESC, a.id DESC
      LIMIT 20";
 

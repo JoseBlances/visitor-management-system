@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ISATU Office Personnel Dashboard</title>
-    <link rel="stylesheet" href="style.css?v=20260921-2">
+    <link rel="stylesheet" href="style.css?v=20261003-3">
 </head>
 <body class="admin-page office-page">
     <header class="admin-topbar">
@@ -267,8 +267,10 @@
                         <small>JPG, PNG, or WebP. Maximum 2 MB.</small>
                     </div>
                 </div>
-                <label class="office-field"><span>Display name</span><input id="officeProfileDisplayName" type="text" minlength="2" maxlength="100" autocomplete="name" required></label>
+                <label class="office-field"><span>Name</span><input id="officeProfileDisplayName" type="text" readonly></label>
+                <label class="office-field"><span>Position</span><input id="officeProfilePosition" type="text" readonly placeholder="Not set"></label>
                 <label class="office-field"><span>Username</span><input id="officeProfileUsernameReadonly" type="text" readonly></label>
+                <p class="office-profile-note">Your name and position are set by the administrator so every action can be traced to the right person. Ask your administrator if they need correcting.</p>
                 <label class="office-remove-photo" id="officeRemoveProfileRow"><input id="officeRemoveProfileImage" type="checkbox"><span>Remove current profile photo</span></label>
             </div>
             <p class="admin-message is-error" id="officeProfileError" role="alert" hidden></p>
@@ -280,7 +282,9 @@
     </dialog>
 
     <div class="office-toast" id="officeToast" role="status" aria-live="polite" hidden></div>
-    <script src="auth.js?v=20260918-2"></script>
-    <script src="offices.js?v=20260929-2"></script>
+    <script src="auth.js?v=20261003-1"></script>
+    <script src="auth_ui.js?v=20261003-1"></script>
+    <script src="account_security.js?v=20261003-1"></script>
+    <script src="offices.js?v=20261003-2"></script>
 </body>
 </html>

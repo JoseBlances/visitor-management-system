@@ -1,0 +1,10 @@
+# Browser security headers for every page and endpoint in phone_tracker.
+<IfModule mod_headers.c>
+    # Other websites may not show these pages inside a frame (clickjacking).
+    Header always set X-Frame-Options "DENY"
+    Header always set Content-Security-Policy "frame-ancestors 'none'"
+    Header always set X-Content-Type-Options "nosniff"
+    # Other sites receive only our origin (e.g. http://localhost/), never page paths.
+    # OpenStreetMap's tile servers require this Referer; "same-origin" gets the maps blocked.
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

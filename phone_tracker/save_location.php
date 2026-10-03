@@ -4,7 +4,7 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_maintenance.php";
 
-require_roles_json(["visitor"]);
+require_permission_json("tracking.self");
 refresh_appointment_time_states($conn);
 
 $data = json_decode(file_get_contents("php://input"), true);

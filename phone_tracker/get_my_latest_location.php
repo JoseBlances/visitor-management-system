@@ -3,7 +3,7 @@ header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 
-require_roles_json(["visitor"]);
+require_permission_json("tracking.self");
 
 $token = isset($_GET["token"]) ? preg_replace("/[^a-f0-9]/i", "", (string) $_GET["token"]) : "";
 if (strlen($token) !== 64) {

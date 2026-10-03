@@ -9,7 +9,7 @@ if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     echo json_encode(["success" => false, "message" => "Method not allowed"]);
     exit;
 }
-require_roles_json(["offices"]);
+require_permission_json("office.appointments");
 
 $input = json_decode(file_get_contents("php://input"), true);
 if (!is_array($input)) {

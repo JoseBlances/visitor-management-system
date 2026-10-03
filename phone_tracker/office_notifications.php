@@ -3,7 +3,7 @@ header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 
-require_roles_json(["offices"]);
+require_permission_json("office.notifications");
 $userId = (int) $_SESSION["user_id"];
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {

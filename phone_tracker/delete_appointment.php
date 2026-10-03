@@ -9,7 +9,7 @@ if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     exit;
 }
 
-require_roles_json(["visitor"]);
+require_permission_json("appointments.book");
 $input = json_decode(file_get_contents("php://input"), true);
 $appointmentId = is_array($input) && isset($input["id"]) ? (int) $input["id"] : 0;
 $visitorUserId = (int) $_SESSION["user_id"];

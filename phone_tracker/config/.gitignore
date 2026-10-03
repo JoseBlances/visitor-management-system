@@ -1,5 +1,8 @@
 firebase-service-account.json
 mobile_api.php
+auth.php
+auth_secret.php
+*.tmp
 !.gitignore
 !mobile_api.example.php
-
+!auth.example.php

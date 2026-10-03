@@ -5,7 +5,7 @@ require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/appointment_maintenance.php";
 
-require_roles_json(["visitor"]);
+require_permission_json("appointments.book");
 refresh_appointment_time_states($conn);
 
 $token = isset($_GET["token"]) ? preg_replace("/[^a-f0-9]/i", "", (string) $_GET["token"]) : "";

@@ -6,7 +6,7 @@ require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/appointment_maintenance.php";
 
-require_roles_json(["security", "admin"]);
+require_permission_json("locations.view_live");
 refresh_appointment_time_states($conn);
 
 // A multi-stop visit is one visitor on campus: it appears once, under the stop that

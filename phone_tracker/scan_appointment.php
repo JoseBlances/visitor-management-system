@@ -11,7 +11,7 @@ if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     exit;
 }
 
-require_roles_json(["security", "admin"]);
+require_permission_json("visits.scan");
 $input = json_decode(file_get_contents("php://input"), true);
 if (!is_array($input)) {
     echo json_encode(["success" => false, "message" => "Invalid request body"]);

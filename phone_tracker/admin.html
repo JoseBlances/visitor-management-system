@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ISATU Admin Dashboard</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    <link rel="stylesheet" href="style.css?v=20260928-2">
+    <link rel="stylesheet" href="style.css?v=20261003-3">
 </head>
 <body class="admin-page">
     <header class="admin-topbar">
@@ -60,6 +60,11 @@
                 <button class="admin-nav-item" type="button" data-admin-view="users">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm13 10v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                     <span>User Management</span>
+                </button>
+                <button class="admin-nav-item" type="button" data-admin-view="security">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8.4 7 9.5 4-1.1 7-5 7-9.5V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+                    <span>Security</span>
+                    <span class="sec-nav-badge" id="securityNavBadge" hidden>0</span>
                 </button>
                 <button class="admin-nav-item" type="button" data-admin-view="analytics">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v18h18M7 16l4-5 4 3 5-7"/></svg>
@@ -138,6 +143,7 @@
                                     <th>Subject</th>
                                     <th>Time</th>
                                     <th>Status</th>
+                                    <th><span class="sr-only">History</span></th>
                                 </tr>
                             </thead>
                             <tbody id="recentVisitorsBody"></tbody>
@@ -153,14 +159,31 @@
                 <section class="admin-content-card admin-activity-card" id="recentActivitiesSection" aria-labelledby="recentActivitiesTitle">
                     <div class="admin-section-header">
                         <div>
-                            <h2 id="recentActivitiesTitle">Recent Activities</h2>
-                            <p>Status changes from the appointment workflow</p>
+                            <h2 id="recentActivitiesTitle">User Activity</h2>
+                            <p>Who did what in the last 7 days, with names and departments</p>
+                        </div>
+                        <div class="admin-table-tools">
+                            <label class="admin-select-label" for="feedDepartment">
+                                <span>Department</span>
+                                <select id="feedDepartment" data-department-select>
+                                    <option value="">All departments</option>
+                                </select>
+                            </label>
+                            <button class="admin-primary-button" id="openActivityLogBtn" type="button">Full activity log</button>
                         </div>
                     </div>
-                    <div class="admin-activity-list" id="recentActivitiesList"></div>
+                    <div class="admin-filter-tabs" role="group" aria-label="Choose the activity to show">
+                        <button class="is-active" type="button" data-feed-category="all">All</button>
+                        <button type="button" data-feed-category="signins">Sign-ins</button>
+                        <button type="button" data-feed-category="decisions">Approvals &amp; declines</button>
+                        <button type="button" data-feed-category="gate">Gate &amp; visits</button>
+                        <button type="button" data-feed-category="schedules">Office schedules</button>
+                        <button type="button" data-feed-category="accounts">Accounts</button>
+                    </div>
+                    <div class="ua-feed" id="recentActivitiesList"></div>
                     <div class="admin-empty-state is-compact" id="recentActivitiesEmpty" hidden>
-                        <strong>No activity yet</strong>
-                        <span>Appointment creation, check-ins, completions, and cancellations will appear here.</span>
+                        <strong>Nothing to show for this choice</strong>
+                        <span>Sign-ins, approvals, check-ins, and account changes appear here with the person's name.</span>
                     </div>
                 </section>
             </section>
@@ -197,6 +220,12 @@
                         </div>
                         <div class="admin-table-tools">
                             <button class="admin-text-action" id="sortUsersBtn" type="button">Sort A–Z</button>
+                            <label class="admin-select-label" for="userDepartmentFilter">
+                                <span>Department</span>
+                                <select id="userDepartmentFilter" data-department-select>
+                                    <option value="">All departments</option>
+                                </select>
+                            </label>
                             <label class="admin-search" for="userSearch">
                                 <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
                                 <input id="userSearch" type="search" placeholder="Search users" autocomplete="off">
@@ -224,6 +253,7 @@
                                     <th>Role</th>
                                     <th>Department</th>
                                     <th>Account Status</th>
+                                    <th>Security</th>
                                     <th><span class="sr-only">Actions</span></th>
                                 </tr>
                             </thead>
@@ -239,6 +269,232 @@
                         <div class="admin-page-buttons" id="userPageButtons" aria-label="User list pages"></div>
                     </div>
                 </section>
+
+                <section class="admin-content-card" aria-labelledby="departmentsTitle">
+                    <div class="admin-section-header">
+                        <div>
+                            <h2 id="departmentsTitle">Department Directory</h2>
+                            <p>Offices that Office Personnel belong to and visitors can book</p>
+                        </div>
+                        <div class="admin-table-tools">
+                            <button class="admin-primary-button" id="addDepartmentBtn" type="button">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                                Add department
+                            </button>
+                        </div>
+                    </div>
+                    <p class="admin-message is-error" id="departmentsError" role="alert" hidden></p>
+                    <p class="admin-message is-success" id="departmentsSuccess" role="status" hidden></p>
+                    <div class="dept-grid" id="departmentsGrid"></div>
+                </section>
+            </section>
+
+            <section class="admin-view sec-view" id="securityView" data-view-panel="security" hidden>
+                <div class="admin-mobile-heading">
+                    <p class="admin-eyebrow">Protection</p>
+                    <h1>Security</h1>
+                </div>
+
+                <div class="ua-tabs" role="tablist" aria-label="Security sections">
+                    <button class="is-active" type="button" role="tab" id="secTabSignin" aria-selected="true" aria-controls="secPanelSignin" data-sec-tab="signin">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                        Sign-in security
+                    </button>
+                    <button type="button" role="tab" id="secTabActivity" aria-selected="false" aria-controls="secPanelActivity" data-sec-tab="activity" tabindex="-1">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 12h-4l-2 3-3-6-2 3"/></svg>
+                        User activity
+                    </button>
+                </div>
+
+                <div id="secPanelSignin" role="tabpanel" aria-labelledby="secTabSignin">
+                <div class="admin-stat-grid sec-stat-grid" aria-label="Sign-in security summary">
+                    <div class="admin-stat-card">
+                        <strong class="is-orange" id="secFailed">0</strong>
+                        <span>Failed Sign-ins</span>
+                        <small>Last 24 hours</small>
+                    </div>
+                    <div class="admin-stat-card">
+                        <strong class="is-red" id="secLocked">0</strong>
+                        <span>Active Lockouts</span>
+                        <small>Sign-ins paused right now</small>
+                    </div>
+                    <div class="admin-stat-card">
+                        <strong class="is-green" id="secTwoFactor">0/0</strong>
+                        <span>Staff with 2-Step</span>
+                        <small>Active staff accounts</small>
+                    </div>
+                    <div class="admin-stat-card">
+                        <strong class="is-blue" id="secMustChange">0</strong>
+                        <span>Need New Password</span>
+                        <small>Temporary or default password</small>
+                    </div>
+                </div>
+
+                <p class="admin-message is-error" id="securityError" role="alert" hidden></p>
+
+                <section class="admin-content-card" aria-labelledby="lockoutsTitle">
+                    <div class="admin-section-header">
+                        <div>
+                            <h2 id="lockoutsTitle">Locked Sign-ins</h2>
+                            <p>Accounts and networks paused after too many failed attempts</p>
+                        </div>
+                    </div>
+                    <div class="admin-table-wrap" id="lockoutsWrap">
+                        <table class="admin-table">
+                            <thead>
+                                <tr>
+                                    <th>Account</th>
+                                    <th>Lock</th>
+                                    <th>Network</th>
+                                    <th>Attempts</th>
+                                    <th>Ends in</th>
+                                    <th><span class="sr-only">Actions</span></th>
+                                </tr>
+                            </thead>
+                            <tbody id="lockoutsBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="admin-empty-state is-compact" id="lockoutsEmpty" hidden>
+                        <strong>No active lockouts</strong>
+                        <span>Sign-in is paused automatically after 5 wrong attempts and shows up here.</span>
+                    </div>
+                </section>
+
+                <section class="admin-content-card" aria-labelledby="attemptsTitle">
+                    <div class="admin-section-header">
+                        <div>
+                            <h2 id="attemptsTitle">Sign-in Activity</h2>
+                            <p>The latest 100 sign-in attempts on the website and the visitor app</p>
+                        </div>
+                        <div class="admin-filter-tabs sec-filter-tabs" role="group" aria-label="Filter sign-in activity">
+                            <button class="is-active" type="button" data-attempt-filter="all">All</button>
+                            <button type="button" data-attempt-filter="failure">Failed</button>
+                            <button type="button" data-attempt-filter="success">Successful</button>
+                        </div>
+                    </div>
+                    <div class="admin-table-wrap" id="attemptsWrap">
+                        <table class="admin-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Account</th>
+                                    <th>Result</th>
+                                    <th>Device</th>
+                                    <th>Network</th>
+                                    <th>Via</th>
+                                </tr>
+                            </thead>
+                            <tbody id="attemptsBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="sec-more">
+                        <button class="admin-text-action" id="attemptsMoreBtn" type="button" hidden>Show more</button>
+                    </div>
+                    <div class="admin-empty-state is-compact" id="attemptsEmpty" hidden>
+                        <strong>No sign-in attempts yet</strong>
+                        <span>Every sign-in on the website and the visitor app is recorded here.</span>
+                    </div>
+                </section>
+
+                <section class="admin-content-card" aria-labelledby="securityEventsTitle">
+                    <div class="admin-section-header">
+                        <div>
+                            <h2 id="securityEventsTitle">Security Events</h2>
+                            <p>Lockouts, password resets, two-step changes, and account changes</p>
+                        </div>
+                    </div>
+                    <ul class="sec-events" id="securityEvents"></ul>
+                    <div class="admin-empty-state is-compact" id="securityEventsEmpty" hidden>
+                        <strong>No security events yet</strong>
+                    </div>
+                </section>
+
+                <p class="sec-policy" id="securityPolicy"></p>
+                </div>
+
+                <div id="secPanelActivity" role="tabpanel" aria-labelledby="secTabActivity" hidden>
+                    <section class="admin-content-card ua-filters" aria-label="Choose what activity to view">
+                        <div class="ua-filter-row">
+                            <label class="ua-field" for="uaPeriod">
+                                <span>Period</span>
+                                <select id="uaPeriod">
+                                    <option value="today">Today</option>
+                                    <option value="7" selected>Last 7 days</option>
+                                    <option value="30">Last 30 days</option>
+                                    <option value="90">Last 90 days</option>
+                                    <option value="custom">Custom dates</option>
+                                </select>
+                            </label>
+                            <label class="ua-field" for="uaFrom" data-ua-custom hidden>
+                                <span>From</span>
+                                <input type="date" id="uaFrom">
+                            </label>
+                            <label class="ua-field" for="uaTo" data-ua-custom hidden>
+                                <span>To</span>
+                                <input type="date" id="uaTo">
+                            </label>
+                            <label class="ua-field" for="uaDepartment">
+                                <span>Department</span>
+                                <select id="uaDepartment" data-department-select data-include-other>
+                                    <option value="">All departments</option>
+                                </select>
+                            </label>
+                            <label class="ua-field" for="uaPerson">
+                                <span>Person</span>
+                                <select id="uaPerson">
+                                    <option value="">Everyone</option>
+                                </select>
+                            </label>
+                            <label class="ua-field ua-search" for="uaSearch">
+                                <span>Search</span>
+                                <input type="search" id="uaSearch" placeholder="Name or appointment #" autocomplete="off">
+                            </label>
+                            <a class="analytics-export-button ua-export" id="uaExportBtn" href="admin_activity.php?format=csv" download>
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+                                Export CSV
+                            </a>
+                        </div>
+                        <div class="admin-filter-tabs ua-category-tabs" role="group" aria-label="Type of activity">
+                            <button class="is-active" type="button" data-ua-category="all">All <span data-ua-count="all"></span></button>
+                            <button type="button" data-ua-category="signins">Sign-ins <span data-ua-count="signins"></span></button>
+                            <button type="button" data-ua-category="decisions">Approvals &amp; declines <span data-ua-count="decisions"></span></button>
+                            <button type="button" data-ua-category="gate">Gate &amp; visits <span data-ua-count="gate"></span></button>
+                            <button type="button" data-ua-category="schedules">Office schedules <span data-ua-count="schedules"></span></button>
+                            <button type="button" data-ua-category="accounts">Accounts &amp; security <span data-ua-count="accounts"></span></button>
+                            <button type="button" data-ua-category="visitors">Visitor requests <span data-ua-count="visitors"></span></button>
+                            <button type="button" data-ua-category="system">Automatic <span data-ua-count="system"></span></button>
+                        </div>
+                    </section>
+
+                    <p class="admin-message is-error" id="uaError" role="alert" hidden></p>
+
+                    <section class="admin-content-card" aria-labelledby="uaBoardTitle">
+                        <div class="admin-section-header">
+                            <div>
+                                <h2 id="uaBoardTitle">Personnel by Department</h2>
+                                <p>Who uses each account, when they were last active, and what they did in this period. Select a person to see their history.</p>
+                            </div>
+                        </div>
+                        <div class="ua-board" id="uaBoard"></div>
+                    </section>
+
+                    <section class="admin-content-card" aria-labelledby="uaLogTitle">
+                        <div class="admin-section-header">
+                            <div>
+                                <h2 id="uaLogTitle">Activity Log</h2>
+                                <p id="uaLogSummary">Every recorded action, newest first</p>
+                            </div>
+                        </div>
+                        <div class="ua-log" id="uaLog"></div>
+                        <div class="admin-empty-state is-compact" id="uaLogEmpty" hidden>
+                            <strong>No activity matches these choices</strong>
+                            <span>Try a longer period, another department, or a different type of activity.</span>
+                        </div>
+                        <div class="sec-more">
+                            <button class="admin-text-action" id="uaMoreBtn" type="button" hidden>Load older activity</button>
+                        </div>
+                    </section>
+                </div>
             </section>
 
             <section class="admin-view analytics-view" id="analyticsView" data-view-panel="analytics" hidden>
@@ -484,18 +740,35 @@
                 </div>
                 <button class="admin-dialog-close" id="closeAddUserBtn" type="button" aria-label="Close">×</button>
             </div>
+            <p class="person-form-heading">Who will use this account</p>
+            <div class="admin-form-grid">
+                <label>
+                    <span>First name</span>
+                    <input type="text" id="newFirstName" autocomplete="off" maxlength="60" required>
+                </label>
+                <label>
+                    <span>Last name</span>
+                    <input type="text" id="newLastName" autocomplete="off" maxlength="60" required>
+                </label>
+                <label>
+                    <span>Position <small>(optional)</small></span>
+                    <input type="text" id="newPosition" autocomplete="off" maxlength="100" placeholder="e.g. Office Secretary">
+                </label>
+                <label>
+                    <span>Contact number <small>(optional)</small></span>
+                    <input type="tel" id="newContactNumber" autocomplete="off" maxlength="20" placeholder="e.g. 0917 123 4567">
+                </label>
+                <label class="sec-wide-field">
+                    <span>Email <small>(optional)</small></span>
+                    <input type="email" id="newEmail" autocomplete="off" maxlength="190">
+                </label>
+            </div>
+            <p class="person-form-heading">Account</p>
             <div class="admin-form-grid">
                 <label>
                     <span>Username</span>
                     <input type="text" id="newUsername" autocomplete="off" maxlength="64" required>
-                </label>
-                <label>
-                    <span>Display name</span>
-                    <input type="text" id="newDisplayName" autocomplete="off" maxlength="100">
-                </label>
-                <label>
-                    <span>Password</span>
-                    <input type="password" id="newPassword" autocomplete="new-password" minlength="6" required>
+                    <small class="person-field-hint" id="newUsernameHint">Suggested from the name. You can change it.</small>
                 </label>
                 <label>
                     <span>Role</span>
@@ -507,16 +780,16 @@
                     </select>
                 </label>
                 <label class="admin-office-field" id="newUserOfficeField" hidden>
-                    <span>Office / Department</span>
+                    <span>Department</span>
                     <select id="newUserOfficeCode">
-                        <option value="">Select office</option>
-                        <option value="IT">IT Department</option>
-                        <option value="IS">IS Department</option>
-                        <option value="CS">CS Department</option>
-                        <option value="DEANS">Dean's Office</option>
-                        <option value="TECH_SUPPORT">Tech Support</option>
+                        <option value="">Select department</option>
                     </select>
+                    <small class="person-field-hint">Missing a department? Add it in the Department Directory below the user list.</small>
                 </label>
+            </div>
+            <div class="sec-callout">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                <p>A one-time temporary password is created for this account. It expires in 24 hours, and the user chooses their own password at first sign-in. <span id="newUserTwoFactorNote" hidden>Administrators also set up two-step verification.</span></p>
             </div>
             <p class="admin-message is-error" id="adminFormError" role="alert" hidden></p>
             <div class="admin-dialog-actions">
@@ -526,10 +799,175 @@
         </form>
     </dialog>
 
+    <dialog class="admin-dialog sec-temp-dialog" id="tempPasswordDialog" aria-labelledby="tempPasswordTitle">
+        <form method="dialog">
+            <div class="admin-dialog-header">
+                <div>
+                    <p class="admin-eyebrow" id="tempPasswordEyebrow">Account created</p>
+                    <h2 id="tempPasswordTitle">Temporary password</h2>
+                </div>
+                <button class="admin-dialog-close" type="submit" aria-label="Close">×</button>
+            </div>
+            <p class="sec-temp-intro">Give this password to <strong id="tempPasswordName">the user</strong> privately (username <strong id="tempPasswordUsername"></strong>). It is shown only once.</p>
+            <div class="sec-temp-box">
+                <code id="tempPasswordValue"></code>
+                <button class="auth-copy-button" type="button" id="copyTempPasswordBtn">Copy</button>
+            </div>
+            <ul class="sec-temp-facts">
+                <li>Works once and expires <strong id="tempPasswordExpires"></strong>.</li>
+                <li>The user must choose their own password when they sign in.</li>
+                <li id="tempPasswordTwoFactor" hidden>They will also set up two-step verification.</li>
+            </ul>
+            <div class="admin-dialog-actions">
+                <button class="admin-primary-button" type="submit">Done</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog class="admin-dialog sec-manage-dialog" id="manageUserDialog" aria-labelledby="manageUserTitle">
+        <div class="sec-manage-shell">
+            <div class="admin-dialog-header">
+                <div>
+                    <p class="admin-eyebrow">Manage account</p>
+                    <h2 id="manageUserTitle">User</h2>
+                </div>
+                <button class="admin-dialog-close" type="button" id="closeManageUserBtn" aria-label="Close">×</button>
+            </div>
+            <dl class="sec-details" id="manageUserDetails"></dl>
+            <form class="person-edit-form" id="manageEditForm" novalidate hidden>
+                <p class="person-form-heading">Edit details</p>
+                <div class="admin-form-grid">
+                    <label>
+                        <span>First name</span>
+                        <input type="text" id="editFirstName" maxlength="60" required>
+                    </label>
+                    <label>
+                        <span>Last name</span>
+                        <input type="text" id="editLastName" maxlength="60" required>
+                    </label>
+                    <label>
+                        <span>Position <small>(optional)</small></span>
+                        <input type="text" id="editPosition" maxlength="100">
+                    </label>
+                    <label>
+                        <span>Contact number <small>(optional)</small></span>
+                        <input type="tel" id="editContactNumber" maxlength="20">
+                    </label>
+                    <label class="sec-wide-field">
+                        <span>Email <small>(optional)</small></span>
+                        <input type="email" id="editEmail" maxlength="190">
+                    </label>
+                    <label class="sec-wide-field" id="editDepartmentField" hidden>
+                        <span>Department</span>
+                        <select id="editDepartment"></select>
+                        <small class="person-field-hint">Moving someone signs them out so the new department takes effect.</small>
+                    </label>
+                </div>
+                <div class="admin-dialog-actions">
+                    <button class="admin-cancel-button" type="button" id="cancelEditDetailsBtn">Cancel</button>
+                    <button class="admin-primary-button" type="submit" id="saveEditDetailsBtn">Save details</button>
+                </div>
+            </form>
+            <p class="admin-message is-error" id="manageUserError" role="alert" hidden></p>
+            <p class="admin-message is-success" id="manageUserSuccess" role="status" hidden></p>
+            <div class="sec-manage-actions" id="manageUserActions"></div>
+        </div>
+    </dialog>
+
+    <dialog class="admin-dialog dept-dialog" id="departmentDialog" aria-labelledby="departmentDialogTitle">
+        <form id="departmentForm" novalidate>
+            <div class="admin-dialog-header">
+                <div>
+                    <p class="admin-eyebrow">Department directory</p>
+                    <h2 id="departmentDialogTitle">Add department</h2>
+                </div>
+                <button class="admin-dialog-close" type="button" data-close-dialog="departmentDialog" aria-label="Close">×</button>
+            </div>
+            <div class="admin-form-grid">
+                <label class="sec-wide-field">
+                    <span>Department name</span>
+                    <input type="text" id="departmentName" maxlength="100" placeholder="e.g. Registrar's Office" required>
+                </label>
+                <label>
+                    <span>Short code</span>
+                    <input type="text" id="departmentCode" maxlength="16" placeholder="e.g. REGISTRAR" autocomplete="off" spellcheck="false">
+                    <small class="person-field-hint" id="departmentCodeHint">Used in records and reports. It cannot be changed later.</small>
+                </label>
+                <label>
+                    <span>Location <small>(optional)</small></span>
+                    <input type="text" id="departmentLocation" maxlength="150" placeholder="e.g. Admin Building, 2nd floor">
+                </label>
+                <label class="sec-wide-field">
+                    <span>Description <small>(optional)</small></span>
+                    <input type="text" id="departmentDescription" maxlength="255" placeholder="What visitors come here for">
+                </label>
+            </div>
+            <p class="admin-message is-error" id="departmentFormError" role="alert" hidden></p>
+            <div class="admin-dialog-actions">
+                <button class="admin-cancel-button" type="button" data-close-dialog="departmentDialog">Cancel</button>
+                <button class="admin-primary-button" type="submit" id="saveDepartmentBtn">Add department</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog class="admin-dialog ua-dialog" id="personDialog" aria-labelledby="personDialogTitle">
+        <div class="ua-dialog-shell">
+            <div class="admin-dialog-header">
+                <div>
+                    <p class="admin-eyebrow" id="personDialogDepartment">Person</p>
+                    <h2 id="personDialogTitle">Activity</h2>
+                </div>
+                <button class="admin-dialog-close" type="button" data-close-dialog="personDialog" aria-label="Close">×</button>
+            </div>
+            <p class="acct-loading" id="personLoading">Loading…</p>
+            <div id="personBody" hidden>
+                <dl class="sec-details" id="personDetails"></dl>
+                <div class="ua-person-stats" id="personStats"></div>
+                <section class="ua-dialog-section" aria-labelledby="personDevicesTitle">
+                    <h3 id="personDevicesTitle">Devices used in the last 30 days</h3>
+                    <p class="ua-shared-warning" id="personSharedWarning" hidden></p>
+                    <ul class="acct-list" id="personDevices"></ul>
+                </section>
+                <section class="ua-dialog-section" aria-labelledby="personActivityTitle">
+                    <h3 id="personActivityTitle">Recent activity</h3>
+                    <div class="ua-log is-compact" id="personActivity"></div>
+                </section>
+                <div class="admin-dialog-actions">
+                    <button class="admin-cancel-button" type="button" id="personManageBtn">Manage account</button>
+                    <button class="admin-primary-button" type="button" id="personFullLogBtn">Show in activity log</button>
+                </div>
+            </div>
+        </div>
+    </dialog>
+
+    <dialog class="admin-dialog ua-dialog" id="trailDialog" aria-labelledby="trailDialogTitle">
+        <div class="ua-dialog-shell">
+            <div class="admin-dialog-header">
+                <div>
+                    <p class="admin-eyebrow" id="trailDialogEyebrow">Appointment history</p>
+                    <h2 id="trailDialogTitle">Appointment</h2>
+                </div>
+                <button class="admin-dialog-close" type="button" data-close-dialog="trailDialog" aria-label="Close">×</button>
+            </div>
+            <p class="acct-loading" id="trailLoading">Loading…</p>
+            <p class="admin-message is-error" id="trailError" role="alert" hidden></p>
+            <div id="trailBody" hidden>
+                <dl class="sec-details" id="trailDetails"></dl>
+                <div class="ua-handled" id="trailHandled"></div>
+                <section class="ua-dialog-section" aria-labelledby="trailTimelineTitle">
+                    <h3 id="trailTimelineTitle">Everything that happened</h3>
+                    <ol class="ua-timeline" id="trailTimeline"></ol>
+                </section>
+            </div>
+        </div>
+    </dialog>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="auth.js?v=20260917-2"></script>
+    <script src="auth.js?v=20261003-1"></script>
+    <script src="auth_ui.js?v=20261003-1"></script>
+    <script src="account_security.js?v=20261003-1"></script>
     <script src="campus_map.js?v=20260928-1"></script>
-    <script src="campus_setup.js?v=20260928-1"></script>
-    <script src="admin.js?v=20260928-2"></script>
+    <script src="campus_setup.js?v=20261003-2"></script>
+    <script src="admin.js?v=20261003-3"></script>
 </body>
 </html>
