@@ -37,7 +37,13 @@ try {
         api_fail("Invalid or expired password reset token", 422);
     }
     $userId = (int) $row["user_id"];
-    $update = $conn->prepare("UPDATE app_users SET password_hash = ?, password_changed_at = NOW() WHERE id = ?");
+    // Also ends website sessions and clears any temporary password an administrator issued.
+    $update = $conn->prepare(
+        "UPDATE app_users
+         SET password_hash = ?, password_changed_at = NOW(), must_change_password = 0,
+             temp_password_expires_at = NULL, session_version = session_version + 1
+         WHERE id = ?"
+    );
     $update->bind_param("si", $newHash, $userId);
     $update->execute();
     $update->close();

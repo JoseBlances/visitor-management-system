@@ -5,7 +5,7 @@ require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/campus_map_service.php";
 
-require_admin_json();
+require_permission_json("campus_map.edit");
 
 const CAMPUS_GATE_TOLERANCE_METERS = 40;
 

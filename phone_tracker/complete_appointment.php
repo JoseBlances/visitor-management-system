@@ -10,7 +10,7 @@ if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     exit;
 }
 
-require_roles_json(["security", "admin"]);
+require_permission_json("visits.complete");
 
 $input = json_decode(file_get_contents("php://input"), true);
 if (!is_array($input) || !isset($input["id"])) {

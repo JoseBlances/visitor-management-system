@@ -7,7 +7,7 @@ require_once dirname(__DIR__, 2) . "/office_availability_service.php";
 api_require_method("GET");
 api_require_visitor();
 $offices = [];
-foreach (appointment_office_map() as $code => $label) {
+foreach (appointment_office_active_map() as $code => $label) {
     try {
         $settings = office_availability_get_settings($conn, $code);
     } catch (Throwable $error) {

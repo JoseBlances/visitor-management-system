@@ -89,6 +89,7 @@
         clearProfilePreviewUrl();
         const profile = state.profile || {};
         byId("officeProfileDisplayName").value = profile.display_name || PhoneTrackerAuth.getDisplayName() || "";
+        byId("officeProfilePosition").value = profile.position || "";
         byId("officeProfileUsernameReadonly").value = profile.username || PhoneTrackerAuth.getUsername() || "";
         byId("officeProfileImage").value = "";
         byId("officeRemoveProfileImage").checked = false;
@@ -1028,7 +1029,6 @@
         showError("officeProfileError", "");
         const saveButton = byId("saveOfficeProfileBtn");
         const formData = new FormData();
-        formData.append("display_name", byId("officeProfileDisplayName").value.trim());
         formData.append("remove_photo", byId("officeRemoveProfileImage").checked ? "1" : "0");
         const file = byId("officeProfileImage").files[0];
         if (file) {

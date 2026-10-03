@@ -6,7 +6,7 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/appointment_maintenance.php";
 
-require_roles_json(["security", "admin"]);
+require_permission_json("visits.monitor");
 refresh_appointment_time_states($conn);
 
 /**

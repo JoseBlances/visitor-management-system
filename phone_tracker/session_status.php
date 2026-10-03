@@ -1,19 +1,30 @@
 <?php
-header("Content-Type: application/json; charset=utf-8");
+require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/session_bootstrap.php";
 
-if (empty($_SESSION["user_id"]) || empty($_SESSION["role"])) {
+header("Content-Type: application/json; charset=utf-8");
+header("Cache-Control: no-store");
+
+$user = auth_current_user();
+if (!$user) {
     echo json_encode([
         "authenticated" => false,
+        "reason" => $GLOBALS["auth_session_end_reason"] ?: "not_authenticated",
     ]);
     exit;
 }
 
 echo json_encode([
     "authenticated" => true,
-    "user_id" => (int) $_SESSION["user_id"],
-    "role" => (string) $_SESSION["role"],
-    "username" => isset($_SESSION["username"]) ? (string) $_SESSION["username"] : "",
-    "display_name" => isset($_SESSION["display_name"]) ? (string) $_SESSION["display_name"] : "",
-    "office_code" => isset($_SESSION["office_code"]) ? (string) $_SESSION["office_code"] : "",
+    "user_id" => $user["id"],
+    "role" => $user["role"],
+    "username" => $user["username"],
+    "display_name" => $user["display_name"],
+    "office_code" => $user["office_code"],
+    "permissions" => auth_role_permissions($user["role"]),
+    "two_factor_enabled" => $user["two_factor_enabled"],
+    "two_factor_required" => auth_two_factor_required_for($user["role"]),
+    "auth_method" => (string) ($_SESSION["auth_method"] ?? "password"),
+    "idle_timeout_seconds" => AUTH_IDLE_TIMEOUT_SECONDS,
+    "session_expires_at" => date("c", (int) $_SESSION["login_at"] + AUTH_ABSOLUTE_TIMEOUT_SECONDS),
 ]);

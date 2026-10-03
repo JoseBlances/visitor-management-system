@@ -4,7 +4,7 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_offices.php";
 
-require_roles_json(["security", "admin"]);
+require_permission_json("visits.monitor");
 
 $stmt = $conn->prepare(
     "SELECT id, public_token, office_code, visitor_full_name, visitor_email, device_name, appointment_at, checked_in_at

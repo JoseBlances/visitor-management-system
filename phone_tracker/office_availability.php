@@ -4,7 +4,7 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/office_availability_service.php";
 
-require_roles_json(["offices"]);
+require_permission_json("office.availability");
 $officeCode = strtoupper(trim((string) ($_SESSION["office_code"] ?? "")));
 $actorId = (int) $_SESSION["user_id"];
 if ($officeCode === "") {

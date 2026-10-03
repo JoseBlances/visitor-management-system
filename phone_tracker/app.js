@@ -3,8 +3,7 @@
         window.location.href = "login.html";
         return;
     }
-    if (PhoneTrackerAuth.getRole() !== "visitor") {
-        window.location.href = "login.html";
+    if (!PhoneTrackerAuth.requireRole(["visitor"])) {
         return;
     }
 
@@ -258,6 +257,30 @@
         pollTimer = setInterval(pollAppointmentCheckIn, 2500);
         pollAppointmentCheckIn();
     }
+
+    // Offices come from the department directory, so newly added departments appear here.
+    // The options written in index.html stay if the list cannot be loaded.
+    function loadOfficeOptions() {
+        const select = document.getElementById("officeCode");
+        if (!select) {
+            return;
+        }
+        fetch("office_directory.php", { credentials: "same-origin", cache: "no-store" })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (!data || !data.success || !Array.isArray(data.offices) || !data.offices.length) {
+                    return;
+                }
+                const selected = select.value;
+                select.replaceChildren(new Option("Select office", ""));
+                data.offices.forEach(function (office) {
+                    select.appendChild(new Option(office.location ? office.name + " — " + office.location : office.name, office.code));
+                });
+                select.value = selected;
+            })
+            .catch(function () {});
+    }
+    loadOfficeOptions();
 
     function openMenu() {
         if (!visitorMenuPanel || !menuOverlay || !menuBtn) {

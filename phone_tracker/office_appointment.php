@@ -4,7 +4,7 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/visit_service.php";
 
-require_roles_json(["offices"]);
+require_permission_json("office.appointments");
 $appointmentId = isset($_GET["id"]) ? (int) $_GET["id"] : 0;
 $officeCode = strtoupper(trim((string) ($_SESSION["office_code"] ?? "")));
 if ($appointmentId <= 0 || $officeCode === "") {

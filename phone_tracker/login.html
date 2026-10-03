@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sign In | ISATU Visitor Management System</title>
-    <link rel="stylesheet" href="style.css?v=20260919-2">
+    <link rel="stylesheet" href="style.css?v=20261003-3">
 </head>
 <body class="auth-page">
     <header class="auth-header">
@@ -17,14 +17,21 @@
     </header>
 
     <main class="auth-main">
-        <section class="auth-card" aria-live="polite">
+        <section class="auth-card" id="authCard">
+            <div class="auth-notice" id="authNotice" role="status" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg>
+                <span id="authNoticeText"></span>
+            </div>
+
+            <!-- 1. Username and password -->
             <div class="auth-panel auth-panel-login" id="signInPanel">
                 <h1 class="auth-panel-title">LOG IN</h1>
+                <p class="auth-panel-subtitle">Sign in with your ISATU account</p>
 
-                <form id="loginForm" class="auth-form" action="login.php" method="post">
+                <form id="loginForm" class="auth-form" novalidate>
                     <div class="auth-field">
-                        <input type="text" id="loginEmail" name="username" autocomplete="username" inputmode="email" placeholder=" " required>
-                        <label for="loginEmail">Email</label>
+                        <input type="text" id="loginEmail" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder=" " required>
+                        <label for="loginEmail">Username or email</label>
                     </div>
 
                     <div class="auth-field auth-password-field">
@@ -34,113 +41,209 @@
                             <img src="assets/icons/visibility_icon.svg" alt="" aria-hidden="true">
                         </button>
                     </div>
+                    <p class="auth-caps" id="capsLockHint" hidden>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 4 7 8h-4v4H9v-4H5l7-8ZM9 20h6"/></svg>
+                        Caps Lock is on
+                    </p>
 
+                    <div class="auth-lock" id="lockBanner" role="alert" hidden>
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                        <div>
+                            <strong id="lockTitle">Sign-in paused</strong>
+                            <span id="lockText"></span>
+                            <span class="auth-lock-timer">Try again in <b id="lockCountdown">10:00</b></span>
+                        </div>
+                    </div>
                     <p class="auth-message" id="loginMessage" role="alert" hidden></p>
+                    <p class="auth-attempts" id="attemptsHint" role="status" hidden></p>
                 </form>
 
                 <button class="auth-submit" id="signInBtn" type="submit" form="loginForm">Log In</button>
+                <p class="auth-secure-note">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8.4 7 9.5 4-1.1 7-5 7-9.5V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+                    Protected by sign-in lockout and two-step verification
+                </p>
+            </div>
+
+            <!-- 2. Authenticating animation -->
+            <div class="auth-panel auth-progress" id="progressPanel" hidden>
+                <div class="auth-ring" id="progressRing" data-state="working">
+                    <svg class="auth-ring-svg" viewBox="0 0 120 120" aria-hidden="true">
+                        <defs>
+                            <linearGradient id="authRingGradient" x1="0" y1="0" x2="1" y2="1">
+                                <stop offset="0%" stop-color="#3b8cf5"/>
+                                <stop offset="100%" stop-color="#0548a0"/>
+                            </linearGradient>
+                        </defs>
+                        <circle class="auth-ring-track" cx="60" cy="60" r="52"/>
+                        <circle class="auth-ring-bar" id="progressBar" cx="60" cy="60" r="52"/>
+                    </svg>
+                    <div class="auth-ring-icon" aria-hidden="true">
+                        <svg class="auth-icon-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8.4 7 9.5 4-1.1 7-5 7-9.5V6l-7-3Z"/><circle cx="12" cy="11" r="2"/><path d="M12 13v3"/></svg>
+                        <svg class="auth-icon-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>
+                        <svg class="auth-icon-cross" viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg>
+                        <svg class="auth-icon-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                    </div>
+                </div>
+                <h2 class="auth-progress-title" id="progressTitle" tabindex="-1">Authenticating</h2>
+                <p class="auth-progress-subtitle" id="progressSubtitle">Hold on while we secure your sign-in</p>
+                <ol class="auth-steps" id="progressSteps">
+                    <li data-state="pending">
+                        <span class="auth-step-icon" aria-hidden="true"></span>
+                        <span class="auth-step-copy"><strong>Verifying your credentials</strong><small>Checking your username and password</small></span>
+                    </li>
+                    <li data-state="pending">
+                        <span class="auth-step-icon" aria-hidden="true"></span>
+                        <span class="auth-step-copy"><strong>Checking account security</strong><small>Lockout status and two-step verification</small></span>
+                    </li>
+                    <li data-state="pending">
+                        <span class="auth-step-icon" aria-hidden="true"></span>
+                        <span class="auth-step-copy"><strong>Securing your session</strong><small>Creating a protected session for this browser</small></span>
+                    </li>
+                    <li data-state="pending">
+                        <span class="auth-step-icon" aria-hidden="true"></span>
+                        <span class="auth-step-copy"><strong>Preparing your dashboard</strong><small id="dashboardStepDetail">Loading your workspace</small></span>
+                    </li>
+                </ol>
+                <p class="sr-only" id="progressLive" role="status" aria-live="polite"></p>
+            </div>
+
+            <!-- 3. Two-step verification -->
+            <div class="auth-panel auth-panel-step" id="twoFactorPanel" hidden>
+                <span class="auth-step-badge" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2M9.5 9.5l1.8 1.8 3.2-3.3"/></svg>
+                </span>
+                <h1 class="auth-panel-title auth-panel-title-small" tabindex="-1">Two-step verification</h1>
+                <p class="auth-panel-subtitle" id="twoFactorIntro">Open your authenticator app and enter the 6-digit code for <strong>ISATU Visitor Management</strong>.</p>
+
+                <form id="twoFactorForm" class="auth-form auth-form-compact" novalidate>
+                    <div class="auth-otp" id="totpGroup">
+                        <input id="totpCode" class="auth-otp-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" spellcheck="false" aria-label="6-digit code from your authenticator app">
+                        <div class="auth-otp-slots" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+                    </div>
+                    <div class="auth-field" id="backupCodeField" hidden>
+                        <input type="text" id="backupCode" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder=" ">
+                        <label for="backupCode">Backup code (for example abcde-12345)</label>
+                    </div>
+                    <label class="auth-check">
+                        <input type="checkbox" id="trustDevice">
+                        <span>Don't ask again on this browser for 30 days<small>Only on your own computer or phone, never a shared one.</small></span>
+                    </label>
+                    <p class="auth-message" id="twoFactorMessage" role="alert" hidden></p>
+                </form>
+
+                <button class="auth-submit" id="twoFactorBtn" type="submit" form="twoFactorForm">Verify</button>
+                <div class="auth-links">
+                    <button class="auth-text-button" id="toggleBackupBtn" type="button">Use a backup code instead</button>
+                    <button class="auth-text-button" type="button" data-cancel-signin>Cancel sign-in</button>
+                </div>
+            </div>
+
+            <!-- 4. New password -->
+            <div class="auth-panel auth-panel-step" id="passwordPanel" hidden>
+                <span class="auth-step-badge" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2"/></svg>
+                </span>
+                <h1 class="auth-panel-title auth-panel-title-small" tabindex="-1">Create a new password</h1>
+                <p class="auth-panel-subtitle" id="passwordIntro">Choose a password only you know.</p>
+
+                <form id="passwordForm" class="auth-form auth-form-compact" novalidate>
+                    <input type="text" id="passwordUsername" name="username" autocomplete="username" hidden>
+                    <div class="auth-field auth-password-field">
+                        <input type="password" id="newPassword" autocomplete="new-password" placeholder=" " required>
+                        <label for="newPassword">New password</label>
+                        <button class="auth-password-toggle" type="button" data-password-toggle="newPassword" aria-label="Show password" aria-pressed="false">
+                            <img src="assets/icons/visibility_icon.svg" alt="" aria-hidden="true">
+                        </button>
+                    </div>
+                    <div class="auth-strength" id="strengthMeter" data-score="0" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+                    <p class="auth-strength-label" id="strengthLabel">Password strength</p>
+                    <ul class="auth-rules" id="passwordRules">
+                        <li data-rule="length" data-state="idle">At least 10 characters</li>
+                        <li data-rule="mix" data-state="idle">A letter and a number</li>
+                        <li data-rule="common" data-state="idle">Not a common or easy-to-guess password</li>
+                        <li data-rule="identity" data-state="idle">Doesn't include your username or name</li>
+                        <li data-rule="match" data-state="idle">Both passwords match</li>
+                    </ul>
+                    <div class="auth-field auth-password-field">
+                        <input type="password" id="confirmPassword" autocomplete="new-password" placeholder=" " required>
+                        <label for="confirmPassword">Confirm new password</label>
+                        <button class="auth-password-toggle" type="button" data-password-toggle="confirmPassword" aria-label="Show password" aria-pressed="false">
+                            <img src="assets/icons/visibility_icon.svg" alt="" aria-hidden="true">
+                        </button>
+                    </div>
+                    <p class="auth-message" id="passwordMessage" role="alert" hidden></p>
+                </form>
+
+                <button class="auth-submit" id="passwordBtn" type="submit" form="passwordForm">Save password</button>
+                <div class="auth-links">
+                    <button class="auth-text-button" type="button" data-cancel-signin>Cancel sign-in</button>
+                </div>
+            </div>
+
+            <!-- 5. Two-step verification setup -->
+            <div class="auth-panel auth-panel-step" id="setupPanel" hidden>
+                <span class="auth-step-badge" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8.4 7 9.5 4-1.1 7-5 7-9.5V6l-7-3Z"/><path d="M12 9v4M12 16h.01"/></svg>
+                </span>
+                <h1 class="auth-panel-title auth-panel-title-small" tabindex="-1">Set up two-step verification</h1>
+                <p class="auth-panel-subtitle" id="setupIntro">Your account needs a code from an authenticator app each time you sign in.</p>
+
+                <ol class="auth-setup-list">
+                    <li>Install <strong>Google Authenticator</strong> or <strong>Microsoft Authenticator</strong> on your phone.</li>
+                    <li>In the app, add an account and scan this QR code.</li>
+                </ol>
+                <div class="auth-qr-frame">
+                    <div class="auth-qr" id="setupQr" role="img" aria-label="QR code for your authenticator app"></div>
+                    <p class="auth-qr-fallback" id="setupQrFallback" hidden>The QR code needs an internet connection. Enter the key below instead.</p>
+                </div>
+                <details class="auth-manual-key" id="setupManualKey">
+                    <summary>Can't scan it? Enter a key instead</summary>
+                    <div class="auth-key-row">
+                        <code id="setupSecret">····</code>
+                        <button class="auth-copy-button" id="copySecretBtn" type="button">Copy</button>
+                    </div>
+                    <small>Account: <span id="setupAccount"></span> · Type: time-based</small>
+                </details>
+
+                <form id="setupForm" class="auth-form auth-form-compact" novalidate>
+                    <p class="auth-setup-label">3. Enter the 6-digit code the app shows</p>
+                    <div class="auth-otp" id="setupCodeGroup">
+                        <input id="setupCode" class="auth-otp-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" spellcheck="false" aria-label="6-digit code from your authenticator app">
+                        <div class="auth-otp-slots" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+                    </div>
+                    <p class="auth-message" id="setupMessage" role="alert" hidden></p>
+                </form>
+
+                <button class="auth-submit" id="setupBtn" type="submit" form="setupForm">Verify and turn on</button>
+                <div class="auth-links">
+                    <button class="auth-text-button" type="button" data-cancel-signin>Cancel sign-in</button>
+                </div>
+            </div>
+
+            <!-- 6. Backup codes -->
+            <div class="auth-panel auth-panel-step" id="backupPanel" hidden>
+                <span class="auth-step-badge is-success" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8.4 7 9.5 4-1.1 7-5 7-9.5V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+                </span>
+                <h1 class="auth-panel-title auth-panel-title-small" tabindex="-1">Save your backup codes</h1>
+                <p class="auth-panel-subtitle">Two-step verification is on. If you lose your phone, each code below signs you in once. They won't be shown again.</p>
+                <ol class="auth-backup-grid" id="backupCodesList"></ol>
+                <div class="auth-backup-actions">
+                    <button class="auth-secondary-button" id="copyCodesBtn" type="button">Copy codes</button>
+                    <button class="auth-secondary-button" id="downloadCodesBtn" type="button">Download .txt</button>
+                </div>
+                <label class="auth-check">
+                    <input type="checkbox" id="savedCodesCheck">
+                    <span>I saved my backup codes somewhere safe</span>
+                </label>
+                <button class="auth-submit" id="continueAfterCodesBtn" type="button" disabled>Continue</button>
             </div>
         </section>
     </main>
 
-    <script src="auth.js?v=20260917-2"></script>
-    <script>
-        (function () {
-            var redirects = {
-                security: "dashboard.html?v=20260917-3",
-                visitor: "index.html",
-                offices: "offices.html",
-                admin: "admin.html?v=20260917-2",
-            };
-
-            var loginForm = document.getElementById("loginForm");
-            var loginMessage = document.getElementById("loginMessage");
-            var signInBtn = document.getElementById("signInBtn");
-
-            document.querySelectorAll("[data-password-toggle]").forEach(function (button) {
-                var input = document.getElementById(button.getAttribute("data-password-toggle"));
-                input.type = "password";
-                button.setAttribute("aria-pressed", "false");
-                button.setAttribute("aria-label", "Show password");
-                button.classList.remove("is-visible");
-
-                button.addEventListener("click", function () {
-                    var willShow = input.type === "password";
-                    input.type = willShow ? "text" : "password";
-                    button.setAttribute("aria-pressed", String(willShow));
-                    button.setAttribute("aria-label", willShow ? "Hide password" : "Show password");
-                    button.classList.toggle("is-visible", willShow);
-                    input.focus({ preventScroll: true });
-                });
-            });
-
-            function showMessage(element, message, state) {
-                element.textContent = message || "";
-                element.hidden = !message;
-                if (message) {
-                    element.dataset.state = state || "error";
-                } else {
-                    delete element.dataset.state;
-                }
-            }
-
-            function redirectToRole(role) {
-                var target = redirects[role] || "index.html";
-                var separator = target.indexOf("?") === -1 ? "?" : "&";
-                window.location.href = target + separator + "role=" + encodeURIComponent(role);
-            }
-
-            fetch("session_status.php", { credentials: "same-origin" })
-                .then(function (response) {
-                    return response.json();
-                })
-                .then(function (data) {
-                    if (!data || !data.authenticated || !data.role) {
-                        return;
-                    }
-                    PhoneTrackerAuth.setSessionFromLogin(data);
-                    redirectToRole(data.role);
-                })
-                .catch(function () {});
-
-            loginForm.addEventListener("submit", function (event) {
-                event.preventDefault();
-                showMessage(loginMessage, "");
-
-                var username = document.getElementById("loginEmail").value.trim();
-                var password = document.getElementById("loginPassword").value;
-                if (!username || !password) {
-                    showMessage(loginMessage, "Enter your email and password.");
-                    return;
-                }
-
-                signInBtn.disabled = true;
-                fetch("login.php", {
-                    method: "POST",
-                    credentials: "same-origin",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ username: username, password: password }),
-                })
-                    .then(function (response) {
-                        return response.json();
-                    })
-                    .then(function (data) {
-                        if (!data || !data.success) {
-                            showMessage(loginMessage, (data && data.message) || "Log in failed.");
-                            return;
-                        }
-                        PhoneTrackerAuth.setSessionFromLogin(data);
-                        redirectToRole(data.role);
-                    })
-                    .catch(function () {
-                        showMessage(loginMessage, "Could not reach the server. Open this page through your local PHP server.");
-                    })
-                    .finally(function () {
-                        signInBtn.disabled = false;
-                    });
-            });
-
-        })();
-    </script>
+    <script src="auth.js?v=20261003-1"></script>
+    <script src="auth_ui.js?v=20261003-1"></script>
+    <script src="login.js?v=20261003-3"></script>
 </body>
 </html>

@@ -5,7 +5,7 @@ require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/appointment_maintenance.php";
 require_once __DIR__ . "/analytics_period.php";
 
-require_admin_json();
+require_permission_json("analytics.view");
 refresh_appointment_time_states($conn);
 
 // Match the local MySQL/system clock used by the ISATU installation.

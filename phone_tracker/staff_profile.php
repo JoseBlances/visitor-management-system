@@ -3,15 +3,18 @@ header("Content-Type: application/json; charset=utf-8");
 
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
+require_once __DIR__ . "/personnel.php";
 
-require_roles_json(["offices", "security", "admin"]);
+require_permission_json("profile.self");
 
 $userId = (int) $_SESSION["user_id"];
 
 function staff_profile_payload(mysqli $conn, int $userId): ?array
 {
+    // Names are managed by administrators (accountability); staff only change their photo.
+    $nameColumns = personnel_schema_ready($conn) ? ", first_name, last_name, position" : "";
     $stmt = $conn->prepare(
-        "SELECT id, username, display_name, role, office_code, profile_image
+        "SELECT id, username, display_name, role, office_code, profile_image{$nameColumns}
          FROM app_users WHERE id = ? AND is_active = 1 LIMIT 1"
     );
     if (!$stmt) {
@@ -28,6 +31,10 @@ function staff_profile_payload(mysqli $conn, int $userId): ?array
         "id" => (int) $row["id"],
         "username" => (string) $row["username"],
         "display_name" => (string) $row["display_name"],
+        "first_name" => (string) ($row["first_name"] ?? ""),
+        "last_name" => (string) ($row["last_name"] ?? ""),
+        "position" => (string) ($row["position"] ?? ""),
+        "department" => personnel_department_label((string) $row["role"], (string) $row["office_code"]),
         "role" => (string) $row["role"],
         "office_code" => (string) $row["office_code"],
         "profile_image_url" => $row["profile_image"] ? (string) $row["profile_image"] : "",
@@ -60,13 +67,7 @@ if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     exit;
 }
 
-$displayName = trim((string) ($_POST["display_name"] ?? ""));
 $removePhoto = (string) ($_POST["remove_photo"] ?? "") === "1";
-if (strlen($displayName) < 2 || strlen($displayName) > 100) {
-    $conn->close();
-    echo json_encode(["success" => false, "message" => "Display name must be between 2 and 100 characters"]);
-    exit;
-}
 
 $current = staff_profile_payload($conn, $userId);
 if (!$current) {
@@ -75,6 +76,8 @@ if (!$current) {
     echo json_encode(["success" => false, "message" => "Profile not found"]);
     exit;
 }
+// The name is set by an administrator so every action can be traced to a real person.
+$displayName = (string) $current["display_name"];
 
 $oldImage = (string) ($current["profile_image_url"] ?? "");
 $newImage = $removePhoto ? "" : $oldImage;

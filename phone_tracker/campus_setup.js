@@ -262,13 +262,43 @@
         }
     }
 
-    const officeSelect = element("campusOfficeSelect");
-    Object.keys(officeNames).forEach(function (code) {
-        const option = document.createElement("option");
-        option.value = code;
-        option.textContent = officeNames[code];
-        officeSelect.appendChild(option);
-    });
+    function fillOfficeSelect() {
+        const select = element("campusOfficeSelect");
+        const current = select.value;
+        select.replaceChildren();
+        Object.keys(officeNames).forEach(function (code) {
+            const option = document.createElement("option");
+            option.value = code;
+            option.textContent = officeNames[code];
+            select.appendChild(option);
+        });
+        if (officeNames[current]) {
+            select.value = current;
+        }
+    }
+
+    // Departments come from the directory, so new ones can get a pin. The list above
+    // stays if the directory cannot be loaded.
+    function loadOfficeNames() {
+        fetch("office_directory.php?all=1", { credentials: "same-origin", cache: "no-store" })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (!data || !data.success || !Array.isArray(data.offices) || !data.offices.length) {
+                    return;
+                }
+                Object.keys(officeNames).forEach(function (code) { delete officeNames[code]; });
+                data.offices.forEach(function (office) {
+                    officeNames[office.code] = office.name + (office.is_active ? "" : " (archived)");
+                });
+                fillOfficeSelect();
+                render();
+            })
+            .catch(function () {});
+    }
+
+    fillOfficeSelect();
+    loadOfficeNames();
+    document.addEventListener("departments:updated", loadOfficeNames);
     document.querySelectorAll("[data-campus-mode]").forEach(function (button) {
         button.addEventListener("click", function () {
             setMode(button.getAttribute("data-campus-mode"));
