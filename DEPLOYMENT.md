@@ -46,8 +46,9 @@ C:\xampp\php\php.exe -r "echo bin2hex(random_bytes(32));"
    | `MARIADB_USER` | `isatu` |
    | `MARIADB_PASSWORD` | another random secret |
 
-4. Attach a **volume** to it with mount path `/var/lib/mysql` (right-click the service on
-   the project canvas, or use its settings).
+4. In its **Settings**, set the **Region** to Singapore, then attach a **volume** with mount
+   path `/var/lib/mysql` (right-click the service on the project canvas, or use its
+   settings). The volume is created in the service's region.
 5. Deploy it. Its log ends with `ready for connections`.
 
 Leave the database without a public address. The web service reaches it over Railway's
@@ -56,7 +57,7 @@ private network.
 ## 2. The web service
 
 1. **Create → GitHub Repo**, pick this repository and the branch to put online. Railway
-   finds the `Dockerfile` and `railway.json` by itself.
+   finds the `Dockerfile` by itself.
 2. In its **Variables**, add (type them exactly; `${{ }}` copies the database's values):
 
    | Variable | Value |
@@ -72,10 +73,20 @@ private network.
    `ISATU_AUTH_SECRET` encrypts everyone's two-step verification setup. Store a copy
    somewhere safe and never change it: a new value breaks every authenticator app (backup
    codes still work).
-3. Attach a **volume** with mount path `/data`.
-4. **Settings → Networking → Generate Domain**, target port `8080`. You get an address
+3. In its **Settings**, set:
+
+   | Setting | Value |
+   |---|---|
+   | Region | Singapore. Set it before adding the volume, which is created in the same region. |
+   | Healthcheck Path | `/phone_tracker/api/v1/`. Railway refuses paths with a dot, such as `health.php`. |
+   | Restart Policy | On Failure, 10 retries |
+   | Watch Paths | `index.php`, `phone_tracker/**`, `Dockerfile`, `docker/**`, so changes to the Android app do not redeploy the website |
+   | Serverless | Off |
+
+4. Attach a **volume** with mount path `/data`.
+5. **Settings → Networking → Generate Domain**, target port `8080`. You get an address
    like `https://isatu-visitors.up.railway.app`.
-5. Deploy. The first build takes a few minutes.
+6. Deploy. The first build takes a few minutes.
 
 ## 3. First start and first sign-in
 
