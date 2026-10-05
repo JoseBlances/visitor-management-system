@@ -74,6 +74,8 @@ jobs:
 
           expect "Site address /" "$(status http://localhost:8080/)" 302
           expect "Sign-in page" "$(status $base/login.html)" 200
+          # Railway's health check path; Railway does not accept paths with a dot.
+          expect "Health check /phone_tracker/api/v1/" "$(status $base/api/v1/)" 200
           for private in config/auth.example.php tools/setup_database.php; do
             expect "Private file $private" "$(status "$base/$private")" 403
           done
