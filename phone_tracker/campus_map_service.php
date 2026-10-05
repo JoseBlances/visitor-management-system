@@ -15,9 +15,32 @@ const CAMPUS_PLACES_TABLE_SQL = "CREATE TABLE IF NOT EXISTS `campus_places` (
   KEY `idx_campus_places_type` (`place_type`, `sort_order`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci";
 
+/** Gates and route points may sit this far outside the drawn boundary (the campus edge). */
+const CAMPUS_EDGE_TOLERANCE_METERS = 40;
+const CAMPUS_ROUTES_MIGRATION_MESSAGE = "Database update required: import phone_tracker/campus_routes_migration.sql into phone_tracker.";
+
 function campus_map_ensure_table(mysqli $conn): bool
 {
     return (bool) $conn->query(CAMPUS_PLACES_TABLE_SQL);
+}
+
+/**
+ * True once campus_routes_migration.sql is imported: walking routes, and pins that remember
+ * whether they were placed on the map or from GPS (with the accuracy).
+ */
+function campus_routes_schema_ready(mysqli $conn): bool
+{
+    static $ready = null;
+    if ($ready !== null) {
+        return $ready;
+    }
+    try {
+        $ready = (bool) $conn->query("SELECT id, office_code, points_json FROM campus_routes LIMIT 0")
+            && (bool) $conn->query("SELECT accuracy_meters, placed_by FROM campus_places LIMIT 0");
+    } catch (Throwable) {
+        $ready = false;
+    }
+    return $ready;
 }
 
 /**
@@ -33,8 +56,9 @@ function campus_map_load(mysqli $conn): array
         return $campus;
     }
 
+    $placement = campus_routes_schema_ready($conn) ? ", accuracy_meters, placed_by" : ", NULL AS accuracy_meters, 'map' AS placed_by";
     $result = $conn->query(
-        "SELECT place_type, office_code, name, latitude, longitude, updated_at
+        "SELECT place_type, office_code, name, latitude, longitude, updated_at{$placement}
          FROM campus_places
          ORDER BY place_type ASC, sort_order ASC, id ASC"
     );
@@ -44,13 +68,22 @@ function campus_map_load(mysqli $conn): array
     while ($row = $result->fetch_assoc()) {
         $latitude = (float) $row["latitude"];
         $longitude = (float) $row["longitude"];
+        // How the pin was placed: "gps" (the admin stood there; accuracy in meters) or "map".
+        $accuracy = $row["accuracy_meters"] === null ? null : (float) $row["accuracy_meters"];
+        $placedBy = $row["placed_by"] === "gps" ? "gps" : "map";
         if ($campus["updated_at"] === null || $row["updated_at"] > $campus["updated_at"]) {
             $campus["updated_at"] = $row["updated_at"];
         }
         if ($row["place_type"] === "boundary") {
             $campus["boundary"][] = [$latitude, $longitude];
         } elseif ($row["place_type"] === "gate") {
-            $campus["gates"][] = ["name" => $row["name"], "latitude" => $latitude, "longitude" => $longitude];
+            $campus["gates"][] = [
+                "name" => $row["name"],
+                "latitude" => $latitude,
+                "longitude" => $longitude,
+                "accuracy_meters" => $accuracy,
+                "placed_by" => $placedBy,
+            ];
         } else {
             $code = (string) $row["office_code"];
             $campus["offices"][] = [
@@ -58,6 +91,8 @@ function campus_map_load(mysqli $conn): array
                 "label" => appointment_office_label($code),
                 "latitude" => $latitude,
                 "longitude" => $longitude,
+                "accuracy_meters" => $accuracy,
+                "placed_by" => $placedBy,
             ];
         }
     }
@@ -117,4 +152,86 @@ function campus_contains(array $boundary, float $latitude, float $longitude): bo
         }
     }
     return $inside;
+}
+
+/** True when a point is inside the campus or within CAMPUS_EDGE_TOLERANCE_METERS of its edge. */
+function campus_point_near_campus(array $boundary, float $latitude, float $longitude): bool
+{
+    return campus_contains($boundary, $latitude, $longitude)
+        || campus_distance_to_boundary_meters($boundary, $latitude, $longitude) <= CAMPUS_EDGE_TOLERANCE_METERS;
+}
+
+/**
+ * Length of a path in meters.
+ *
+ * @param array<int, array{0: float, 1: float}> $points
+ */
+function campus_path_length_meters(array $points): float
+{
+    $total = 0.0;
+    for ($index = 1, $count = count($points); $index < $count; $index++) {
+        $total += campus_distance_meters($points[$index - 1][0], $points[$index - 1][1], $points[$index][0], $points[$index][1]);
+    }
+    return $total;
+}
+
+/** "First Last", else the display name, else the username of whoever saved a route. */
+function campus_route_person(?string $firstName, ?string $lastName, ?string $displayName, ?string $username = null): string
+{
+    $name = trim(trim((string) $firstName) . " " . trim((string) $lastName));
+    if ($name === "") {
+        $name = trim((string) $displayName);
+    }
+    return $name !== "" ? $name : trim((string) $username);
+}
+
+/**
+ * Every walking route, grouped by department in the order they were recorded. Each route's
+ * points run from its start (usually a gate) to the department.
+ *
+ * @return array<int, array<string, mixed>>
+ */
+function campus_routes_load(mysqli $conn, ?int $routeId = null): array
+{
+    if (!campus_routes_schema_ready($conn)) {
+        return [];
+    }
+    $sql = "SELECT r.id, r.office_code, r.name, r.start_label, r.method, r.points_json, r.point_count,
+                   r.distance_meters, r.duration_seconds, r.average_accuracy_meters, r.created_at, r.updated_at,
+                   c.first_name AS created_first, c.last_name AS created_last, c.display_name AS created_display, c.username AS created_username,
+                   u.first_name AS updated_first, u.last_name AS updated_last, u.display_name AS updated_display, u.username AS updated_username
+            FROM campus_routes r
+            LEFT JOIN app_users c ON c.id = r.created_by_user_id
+            LEFT JOIN app_users u ON u.id = r.updated_by_user_id";
+    if ($routeId !== null) {
+        $stmt = $conn->prepare($sql . " WHERE r.id = ?");
+        $stmt->bind_param("i", $routeId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $stmt->close();
+    } else {
+        $result = $conn->query($sql . " ORDER BY r.office_code ASC, r.id ASC");
+    }
+    $routes = [];
+    while ($row = $result->fetch_assoc()) {
+        $points = json_decode((string) $row["points_json"], true);
+        $routes[] = [
+            "id" => (int) $row["id"],
+            "office_code" => (string) $row["office_code"],
+            "office_label" => appointment_office_label((string) $row["office_code"]),
+            "name" => (string) $row["name"],
+            "start_label" => (string) $row["start_label"],
+            "method" => $row["method"] === "drawn" ? "drawn" : "walked",
+            "points" => is_array($points) ? $points : [],
+            "point_count" => (int) $row["point_count"],
+            "distance_meters" => (float) $row["distance_meters"],
+            "duration_seconds" => $row["duration_seconds"] === null ? null : (int) $row["duration_seconds"],
+            "average_accuracy_meters" => $row["average_accuracy_meters"] === null ? null : (float) $row["average_accuracy_meters"],
+            "created_by" => campus_route_person($row["created_first"], $row["created_last"], $row["created_display"], $row["created_username"]),
+            "updated_by" => campus_route_person($row["updated_first"], $row["updated_last"], $row["updated_display"], $row["updated_username"]),
+            "created_at" => (string) $row["created_at"],
+            "updated_at" => (string) $row["updated_at"],
+        ];
+    }
+    return $routes;
 }

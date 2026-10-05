@@ -18,7 +18,8 @@ The **Campus visit** screen opens by itself when the pass is scanned at the gate
   and the compass button turns the map north again. There is no circle around the arrow:
   GPS accuracy is shown as text ("GPS ±4 m") so it is never mistaken for the arrival area.
 - **Dotted line:** points straight from the visitor to the office. It is a pointer, not a
-  walking route (there is no walkway data), and the app says so. The visitor's walked trail
+  walking route, and the app says so. (Administrators can now record walking routes, see
+  `CAMPUS_ROUTES.md`, but the app does not use them yet.) The visitor's walked trail
   is never shown here; it stays with Security.
 - **Banner:** an arrow that points at the office from where the phone faces, the distance
   (to the meter under 20 m), how accurate GPS is right now, which side ("slightly to your
@@ -105,7 +106,8 @@ open (on).
 
 In **Campus Map**: the boundary, a pin for each department **at its entrance**, and gates
 (used to guide visitors out; without gates the app guides them back to where they were
-checked in). In **User Management → Department Directory**, each department's **location**
+checked in). **Pin at my location** places a pin from where the administrator stands, which
+is more accurate than clicking the map (`CAMPUS_ROUTES.md`). In **User Management → Department Directory**, each department's **location**
 (building, floor, room) is shown and spoken on arrival. Office accounts receive arrival
 notifications, so each office needs an active Office Personnel account.
 

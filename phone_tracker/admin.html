@@ -6,7 +6,7 @@
     <title>ISATU Admin Dashboard</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
-    <link rel="stylesheet" href="style.css?v=20261005-2">
+    <link rel="stylesheet" href="style.css?v=20261006-3">
 </head>
 <body class="admin-page">
     <header class="admin-topbar">
@@ -678,7 +678,7 @@
                     <div>
                         <p class="admin-eyebrow">Campus setup</p>
                         <h1>Campus Map</h1>
-                        <p>Draw the ISATU campus boundary and place its gates and offices. Maps and route analytics stay inside this boundary.</p>
+                        <p>Draw the ISATU campus boundary, place its gates and offices, and record the walking routes visitors should take. Maps and route analytics stay inside this boundary.</p>
                     </div>
                 </header>
 
@@ -692,6 +692,7 @@
                             <button class="is-active" type="button" data-campus-mode="boundary">Boundary</button>
                             <button type="button" data-campus-mode="gates">Gates</button>
                             <button type="button" data-campus-mode="offices">Offices</button>
+                            <button type="button" data-campus-mode="routes">Routes</button>
                         </div>
 
                         <div data-campus-panel="boundary">
@@ -708,7 +709,8 @@
                                 <span>Gate name</span>
                                 <input id="campusGateName" type="text" maxlength="100" placeholder="e.g. Main Gate" autocomplete="off">
                             </label>
-                            <p class="campus-setup-help">Type a name, then click the map where the gate is. Drag a gate to adjust it.</p>
+                            <button class="campus-locate-button" id="campusGateLocateBtn" type="button" data-campus-locate>Add gate at my location</button>
+                            <p class="campus-setup-help">Most accurate: stand at the gate with your phone and press the button above. Or type a name and click the map where the gate is. Drag a gate to adjust it.</p>
                             <div class="campus-setup-list" id="campusGateList"></div>
                         </div>
 
@@ -717,8 +719,103 @@
                                 <span>Office</span>
                                 <select id="campusOfficeSelect"></select>
                             </label>
-                            <p class="campus-setup-help">Pick an office, then click its building on the map. Clicking again moves the pin.</p>
+                            <button class="campus-locate-button" id="campusOfficeLocateBtn" type="button" data-campus-locate>Pin at my location</button>
+                            <p class="campus-setup-help">Most accurate: stand at the office's entrance with your phone and press the button above; visitors are guided to this spot. Or pick an office and click its building on the map. Clicking again moves the pin.</p>
                             <div class="campus-setup-list" id="campusOfficeList"></div>
+                        </div>
+
+                        <div data-campus-panel="routes" hidden>
+                            <p class="admin-message is-error" id="campusRouteUnavailable" role="alert" hidden></p>
+                            <div class="campus-route-resume" id="campusRouteResume" hidden>
+                                <span id="campusRouteResumeText"></span>
+                                <div class="campus-setup-actions">
+                                    <button class="admin-primary-button" id="campusRouteResumeBtn" type="button">Continue</button>
+                                    <button class="admin-cancel-button" id="campusRouteResumeDiscardBtn" type="button">Discard</button>
+                                </div>
+                            </div>
+
+                            <div id="campusRouteIdle">
+                                <div class="campus-route-coverage" id="campusRouteCoverage"></div>
+                                <label class="campus-setup-field" for="campusRouteOffice">
+                                    <span>Destination department</span>
+                                    <select id="campusRouteOffice"></select>
+                                </label>
+                                <div class="campus-route-start-buttons">
+                                    <button class="admin-primary-button" id="campusRouteRecordBtn" type="button">Record by walking</button>
+                                    <button class="admin-cancel-button" id="campusRouteDrawBtn" type="button">Draw on the map</button>
+                                </div>
+                                <p class="campus-setup-help">To record: stand at the gate or guard house with your phone, press Record by walking, and walk the way a visitor should go, through doors and around buildings. Press I've arrived at the department's entrance. Drawing on the map is for corrections, or when walking is not possible.</p>
+                                <div class="campus-route-list" id="campusRouteList"></div>
+                            </div>
+
+                            <div id="campusRouteRecording" hidden>
+                                <p class="campus-route-title" id="campusRecTitle">Recording a route</p>
+                                <div class="campus-route-stats">
+                                    <div><span>Time</span><strong id="campusRecTime">0:00</strong></div>
+                                    <div><span>Distance</span><strong id="campusRecDistance">0 m</strong></div>
+                                    <div><span>GPS</span><strong id="campusRecAccuracy">—</strong></div>
+                                </div>
+                                <p class="campus-route-status" id="campusRecStatus" role="status">Waiting for GPS…</p>
+                                <p class="campus-route-points" id="campusRecPoints">0 points</p>
+                                <div class="campus-setup-actions">
+                                    <button class="admin-cancel-button" id="campusRecPauseBtn" type="button">Pause</button>
+                                    <button class="admin-cancel-button" id="campusRecUndoBtn" type="button">Undo last 10 m</button>
+                                </div>
+                                <button class="admin-primary-button campus-route-big" id="campusRecFinishBtn" type="button">I've arrived</button>
+                                <button class="admin-cancel-button campus-route-wide" id="campusRecCancelBtn" type="button">Cancel recording</button>
+                                <p class="campus-setup-help">Keep this page open and the screen on while you walk; phones stop sharing a web page's location when the screen sleeps. Pause while you wait at a door, Undo if you took a wrong turn.</p>
+                            </div>
+
+                            <div id="campusRouteDrawing" hidden>
+                                <p class="campus-route-title" id="campusDrawTitle">Drawing a route</p>
+                                <p class="campus-setup-help">Click along the walkway from the start (usually a gate) to the department. Drag a point to move it, click a point to remove it, or click the line to add a point there.</p>
+                                <p class="campus-setup-count" id="campusDrawCount">0 points · 0 m</p>
+                                <div class="campus-setup-actions">
+                                    <button class="admin-cancel-button" id="campusDrawUndoBtn" type="button">Undo last point</button>
+                                    <button class="admin-cancel-button" id="campusDrawReverseBtn" type="button">Reverse direction</button>
+                                </div>
+                                <button class="admin-primary-button campus-route-wide" id="campusDrawFinishBtn" type="button" disabled>Done</button>
+                                <button class="admin-cancel-button campus-route-wide" id="campusDrawCancelBtn" type="button">Cancel</button>
+                            </div>
+
+                            <div id="campusRouteReview" hidden>
+                                <p class="campus-route-title" id="campusReviewTitle">New route</p>
+                                <div class="campus-route-stats">
+                                    <div><span>Distance</span><strong id="campusReviewDistance">0 m</strong></div>
+                                    <div><span>Walk</span><strong id="campusReviewWalk">—</strong></div>
+                                    <div><span>Points</span><strong id="campusReviewPoints">0</strong></div>
+                                </div>
+                                <ul class="campus-route-warnings" id="campusReviewWarnings" hidden></ul>
+                                <label class="campus-route-toggle" id="campusReviewCleanWrap" hidden>
+                                    <input id="campusReviewClean" type="checkbox" checked>
+                                    <span>Smooth out GPS wobble (the dashed line is the raw GPS track)</span>
+                                </label>
+                                <label class="campus-setup-field" for="campusReviewName">
+                                    <span>Route name</span>
+                                    <input id="campusReviewName" type="text" maxlength="120" autocomplete="off">
+                                </label>
+                                <label class="campus-setup-field" for="campusReviewStart">
+                                    <span>Starts at</span>
+                                    <input id="campusReviewStart" type="text" maxlength="100" list="campusGateNames" placeholder="e.g. Main Gate" autocomplete="off">
+                                    <datalist id="campusGateNames"></datalist>
+                                </label>
+                                <label class="campus-route-toggle" id="campusReviewPinWrap" hidden>
+                                    <input id="campusReviewPin" type="checkbox">
+                                    <span id="campusReviewPinText">Move the department pin to where you stopped</span>
+                                </label>
+                                <button class="admin-cancel-button campus-route-wide" id="campusReviewAdjustBtn" type="button">Adjust points</button>
+                                <button class="admin-primary-button campus-route-big" id="campusReviewSaveBtn" type="button">Save route</button>
+                                <button class="admin-cancel-button campus-route-wide" id="campusReviewDiscardBtn" type="button">Discard</button>
+                            </div>
+                        </div>
+
+                        <div class="campus-locate-box" id="campusLocateBox" role="status" hidden>
+                            <strong id="campusLocateTitle">Finding your location</strong>
+                            <span id="campusLocateStatus">Waiting for GPS…</span>
+                            <div class="campus-setup-actions">
+                                <button class="admin-primary-button" id="campusLocateUseBtn" type="button" disabled>Use this location</button>
+                                <button class="admin-cancel-button" id="campusLocateCancelBtn" type="button">Cancel</button>
+                            </div>
                         </div>
 
                         <p class="admin-message" id="campusSetupMessage" role="status" hidden></p>
@@ -971,7 +1068,9 @@
     <script src="auth_ui.js?v=20261003-1"></script>
     <script src="account_security.js?v=20261004-1"></script>
     <script src="campus_map.js?v=20261005-2"></script>
-    <script src="campus_setup.js?v=20261005-1"></script>
+    <script src="campus_gps.js?v=20261006-3"></script>
+    <script src="campus_setup.js?v=20261006-3"></script>
+    <script src="campus_routes_editor.js?v=20261006-3"></script>
     <script src="admin.js?v=20261005-1"></script>
 </body>
 </html>

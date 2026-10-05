@@ -39,6 +39,21 @@ function campus_read_point($latitude, $longitude, string $what): array
     return [round((float) $latitude, 7), round((float) $longitude, 7)];
 }
 
+/**
+ * How a pin was placed: "gps" (the admin stood there; accuracy in meters) or "map".
+ *
+ * @return array{0: string, 1: ?float}
+ */
+function campus_read_placement($item): array
+{
+    $placedBy = is_array($item) && ($item["placed_by"] ?? "") === "gps" ? "gps" : "map";
+    $accuracy = null;
+    if ($placedBy === "gps" && isset($item["accuracy_meters"]) && is_numeric($item["accuracy_meters"])) {
+        $accuracy = round(max(0, min(999, (float) $item["accuracy_meters"])), 1);
+    }
+    return [$placedBy, $accuracy];
+}
+
 $boundaryInput = isset($input["boundary"]) && is_array($input["boundary"]) ? $input["boundary"] : [];
 $gatesInput = isset($input["gates"]) && is_array($input["gates"]) ? $input["gates"] : [];
 $officesInput = isset($input["offices"]) && is_array($input["offices"]) ? $input["offices"] : [];
@@ -70,11 +85,12 @@ foreach ($gatesInput as $gate) {
     }
     $gateNames[mb_strtolower($name)] = true;
     $point = campus_read_point($gate["latitude"] ?? null, $gate["longitude"] ?? null, $name);
-    $gates[] = ["name" => $name, "point" => $point];
+    $gates[] = ["name" => $name, "point" => $point, "placement" => campus_read_placement($gate)];
 }
 
 $officeMap = appointment_office_map();
 $offices = [];
+$officePlacement = [];
 foreach ($officesInput as $office) {
     $code = is_array($office) ? strtoupper(trim((string) ($office["code"] ?? ""))) : "";
     if (!isset($officeMap[$code])) {
@@ -84,6 +100,7 @@ foreach ($officesInput as $office) {
         campus_fail("Each office can only have one pin.");
     }
     $offices[$code] = campus_read_point($office["latitude"] ?? null, $office["longitude"] ?? null, $officeMap[$code]);
+    $officePlacement[$code] = campus_read_placement($office);
 }
 
 foreach ($gates as $gate) {
@@ -104,15 +121,24 @@ if (!campus_map_ensure_table($conn)) {
 }
 
 $userId = (int) $_SESSION["user_id"];
+// Databases without campus_routes_migration.sql keep saving pins without their placement.
+$hasPlacement = campus_routes_schema_ready($conn);
 $conn->begin_transaction();
 try {
     $conn->query("DELETE FROM campus_places");
-    $stmt = $conn->prepare(
-        "INSERT INTO campus_places (place_type, office_code, name, latitude, longitude, sort_order, updated_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)"
+    $stmt = $conn->prepare($hasPlacement
+        ? "INSERT INTO campus_places (place_type, office_code, name, latitude, longitude, accuracy_meters, placed_by, sort_order, updated_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        : "INSERT INTO campus_places (place_type, office_code, name, latitude, longitude, sort_order, updated_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?)"
     );
-    $insert = function (string $type, ?string $officeCode, string $name, array $point, int $order) use ($stmt, $userId): void {
-        $stmt->bind_param("sssddii", $type, $officeCode, $name, $point[0], $point[1], $order, $userId);
+    $insert = function (string $type, ?string $officeCode, string $name, array $point, int $order, array $placement = ["map", null]) use ($stmt, $userId, $hasPlacement): void {
+        [$placedBy, $accuracy] = $placement;
+        if ($hasPlacement) {
+            $stmt->bind_param("sssdddsii", $type, $officeCode, $name, $point[0], $point[1], $accuracy, $placedBy, $order, $userId);
+        } else {
+            $stmt->bind_param("sssddii", $type, $officeCode, $name, $point[0], $point[1], $order, $userId);
+        }
         if (!$stmt->execute()) {
             throw new RuntimeException("Insert failed");
         }
@@ -121,11 +147,11 @@ try {
         $insert("boundary", null, "Campus boundary", $point, $index);
     }
     foreach ($gates as $index => $gate) {
-        $insert("gate", null, $gate["name"], $gate["point"], $index);
+        $insert("gate", null, $gate["name"], $gate["point"], $index, $gate["placement"]);
     }
     $order = 0;
     foreach ($offices as $code => $point) {
-        $insert("office", $code, $officeMap[$code], $point, $order++);
+        $insert("office", $code, $officeMap[$code], $point, $order++, $officePlacement[$code]);
     }
     $stmt->close();
     $conn->commit();
@@ -133,6 +159,17 @@ try {
     $conn->rollback();
     campus_fail("Could not save the campus map.");
 }
+
+$gpsPins = count(array_filter(array_merge(
+    array_map(fn(array $gate): string => $gate["placement"][0], $gates),
+    array_map(fn(array $placement): string => $placement[0], $officePlacement)
+), fn(string $placedBy): bool => $placedBy === "gps"));
+auth_audit($conn, $userId, "campus.map_saved", "campus_map", "campus", [
+    "corners" => count($boundary),
+    "gates" => count($gates),
+    "offices" => count($offices),
+    "gps_pins" => $gpsPins,
+]);
 
 $campus = campus_map_load($conn);
 $conn->close();
