@@ -41,4 +41,16 @@ setsid sh -c '
     done
 ' "$PHP" "$APP" &
 
+# Apache must load exactly one MPM, prefork, which mod_php requires. On Railway the
+# image's switched-off modules can come back ("More than one MPM loaded", a known Railway
+# issue), so they are switched off again at every start. Apache's configuration check
+# then runs first, so any remaining problem is printed in the deploy log instead of
+# Apache silently restarting.
+a2dismod -q -f mpm_event mpm_worker autoindex status > /dev/null 2>&1 || true
+a2enmod -q mpm_prefork > /dev/null 2>&1 || true
+if ! apache2ctl -t 2> /tmp/apache-configtest.log; then
+    echo "Apache configuration check failed:" >&2
+    cat /tmp/apache-configtest.log >&2
+fi
+
 exec apache2-foreground
