@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build the image
         run: docker build -t isatu-vms .
@@ -44,6 +44,7 @@ jobs:
           docker run -d --name web --network isatu -p 8080:8080 \
             -e ISATU_DATABASE_URL=mysql://isatu:isatu-secret@db:3306/app \
             -e ISATU_ADMIN_PASSWORD=Smoke-Test-Admin-1 \
+            -e ISATU_AUTH_SECRET="$(openssl rand -hex 32)" \
             isatu-vms
 
       - name: Wait until it is healthy
@@ -54,35 +55,49 @@ jobs:
             fi
             sleep 3
           done
-          docker logs web
+          echo "::error title=Server check failed::The server did not answer its health check within 3 minutes. See the Startup log step."
           exit 1
 
+      # Each failed check is written as an error note, which shows on the pull request
+      # without opening the log.
       - name: Pages, privacy rules, uploads, and sign-in
         run: |
           set -eu
           base=http://localhost:8080/phone_tracker
           status() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
-          test "$(status http://localhost:8080/)" = 302
-          test "$(status $base/login.html)" = 200
-          for private in config/auth.example.php tools/setup_database.php uploads/profile_pictures/; do
-            code=$(status "$base/$private")
-            echo "$private -> $code"
-            test "$code" = 403
+          fail() { echo "::error title=Server check failed::$1"; exit 1; }
+          expect() { [ "$2" = "$3" ] || fail "$1: expected $3, got $2"; }
+          # Output is always read in full before it is searched. GitHub runs this step with
+          # pipefail, so a search that stops early in a pipe ("grep -q") fails even when it
+          # finds the text.
+          contains() { grep -qiF -- "$2" <<< "$1"; }
+
+          expect "Site address /" "$(status http://localhost:8080/)" 302
+          expect "Sign-in page" "$(status $base/login.html)" 200
+          for private in config/auth.example.php tools/setup_database.php; do
+            expect "Private file $private" "$(status "$base/$private")" 403
           done
-          curl -sI "$base/login.html" | grep -i "^content-security-policy:"
+          # No folder listings (403, or 404 where Apache's listing module is off).
+          listing=$(status "$base/uploads/profile_pictures/")
+          [ "$listing" = 403 ] || [ "$listing" = 404 ] || fail "Uploads folder: expected no listing (403 or 404), got $listing"
+          headers=$(curl -sI "$base/login.html")
+          contains "$headers" "content-security-policy:" || fail "Sign-in page: Content-Security-Policy header missing"
 
           # Photos on the /data volume are served; scripts placed there are not.
           docker exec web sh -c 'echo ok > /data/uploads/profile_pictures/ci.txt && echo "<?php echo 1;" > /data/uploads/profile_pictures/ci.php'
-          test "$(curl -s "$base/uploads/profile_pictures/ci.txt")" = ok
-          test "$(status $base/uploads/profile_pictures/ci.php)" = 403
+          expect "Photo on the /data volume" "$(curl -s "$base/uploads/profile_pictures/ci.txt")" ok
+          expect "Script in the uploads folder" "$(status $base/uploads/profile_pictures/ci.php)" 403
 
           # The published password "password" no longer works; the chosen one asks for a new password.
           jar=$(mktemp)
           curl -s -c "$jar" -b "$jar" "$base/session_status.php" > /dev/null
           token=$(awk '$6 == "ISATU_VMS_CSRF" {print $7}' "$jar")
+          [ -n "$token" ] || fail "session_status.php did not set the sign-in safety cookie"
           login() { curl -s -c "$jar" -b "$jar" -H "Content-Type: application/json" -H "X-CSRF-Token: $token" -d "$1" "$base/login.php"; }
-          login '{"username":"admin","password":"password"}' | grep -q '"invalid_credentials"'
-          login '{"username":"admin","password":"Smoke-Test-Admin-1"}' | grep -q '"password_change_required"'
+          reply=$(login '{"username":"admin","password":"password"}')
+          contains "$reply" '"invalid_credentials"' || fail "The published password was not refused: ${reply:0:200}"
+          reply=$(login '{"username":"admin","password":"Smoke-Test-Admin-1"}')
+          contains "$reply" '"password_change_required"' || fail "The chosen admin password did not lead to choosing a new one: ${reply:0:200}"
 
           # A restart keeps the database as it is and reports ready.
           docker restart web
@@ -91,8 +106,18 @@ jobs:
             sleep 3
           done
           # The second start imports nothing ("up to date." without a file count).
-          docker logs web 2>&1 | grep -q '^Database is up to date\.$'
+          logs=$(docker logs web 2>&1)
+          grep -qxF "Database is up to date." <<< "$logs" || fail "After a restart, the database setup did not report up to date"
 
       - name: Startup log
         if: always()
-        run: docker logs web
+        run: |
+          logs=$(docker logs web 2>&1 || true)
+          printf '%s\n' "$logs"
+          # Show the readiness report's problems and warnings as notes on the pull request.
+          notes=$(grep -E '^\[(FAIL|WARN)\]' <<< "$logs" | sort -u | head -10 || true)
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              echo "::notice title=Readiness report::$line"
+            fi
+          done <<< "$notes"
