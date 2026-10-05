@@ -32,12 +32,13 @@ fi
 as_web "$PHP" "$APP/tools/preflight.php" || true
 
 # Background jobs (emails, push notifications, visit timing, history cleanup), restarted
-# if they ever stop.
-(
+# if they ever stop. They run in a session of their own: Apache signals everything in its
+# own process group when it stops, which would cut their output off mid-line.
+setsid sh -c '
     while true; do
-        as_web "$PHP" "$APP/workers/run_scheduled_jobs.php" || true
+        runuser -u www-data -- "$0" "$1/workers/run_scheduled_jobs.php" || true
         sleep 10
     done
-) &
+' "$PHP" "$APP" &
 
 exec apache2-foreground
