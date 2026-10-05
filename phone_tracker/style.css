@@ -5464,7 +5464,7 @@ button.admin-stat-card:hover {
 
 .campus-mode-tabs {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
 }
 
 .campus-setup-panel [data-campus-panel][hidden] {
@@ -9021,4 +9021,416 @@ html.has-expanded-map body {
 /* While names are on the map, the hover tooltip would only repeat them. */
 .show-campus-labels .leaflet-tooltip.campus-overlay-tip {
     display: none;
+}
+
+/* Campus Map: pins from GPS and walking routes (campus_setup.js, campus_routes_editor.js). */
+.campus-setup-panel [hidden] {
+    display: none !important;
+}
+
+.campus-locate-button {
+    display: flex;
+    width: 100%;
+    min-height: 40px;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 1px solid #0755b5;
+    border-radius: 8px;
+    background: #eef4fd;
+    color: #0755b5;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.campus-locate-button::before {
+    width: 9px;
+    height: 9px;
+    flex: none;
+    border-radius: 50%;
+    background: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+    content: "";
+}
+
+.campus-locate-button:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.campus-locate-box {
+    display: flex;
+    padding: 10px 12px;
+    flex-direction: column;
+    gap: 6px;
+    border: 1px solid #bfd3f3;
+    border-radius: 10px;
+    background: #f3f7fd;
+    color: #33475b;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.campus-locate-box strong {
+    color: #1d3557;
+    font-size: 12px;
+}
+
+.campus-me-dot span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 3px solid #ffffff;
+    border-radius: 50%;
+    background: #2563eb;
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45);
+    animation: campus-me-pulse 1.8s ease-out infinite;
+}
+
+@keyframes campus-me-pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.45);
+    }
+
+    100% {
+        box-shadow: 0 0 0 14px rgba(37, 99, 235, 0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .campus-me-dot span {
+        animation: none;
+    }
+}
+
+.campus-setup-map.is-routes-mode {
+    cursor: grab;
+}
+
+.campus-setup-map.is-drawing-route {
+    cursor: crosshair;
+}
+
+/* Direction arrows along a route: a triangle pointing north, turned to the walking direction. */
+.campus-route-arrow span {
+    display: block;
+    width: 0;
+    height: 0;
+    margin: 1px auto 0;
+    border-right: 5px solid transparent;
+    border-bottom: 11px solid #333333;
+    border-left: 5px solid transparent;
+    filter: drop-shadow(0 0 1px #ffffff) drop-shadow(0 0 1px #ffffff);
+    transform-origin: 50% 60%;
+}
+
+.campus-route-start span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 3px solid #159969;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.campus-route-vertex span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 2px solid #ffffff;
+    border-radius: 50%;
+    background: #1d3557;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+    cursor: move;
+}
+
+.campus-route-vertex.is-start span {
+    background: #159969;
+}
+
+.campus-route-vertex.is-end span {
+    background: #0755b5;
+}
+
+.campus-route-coverage {
+    display: flex;
+    margin-bottom: 10px;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.campus-route-coverage strong {
+    color: #26313f;
+    font-size: 12px;
+}
+
+.campus-route-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.campus-route-chip {
+    padding: 2px 7px;
+    border: 1px solid #d5dbe2;
+    border-radius: 999px;
+    background: #f8fafc;
+    color: #737d89;
+    font-size: 10px;
+}
+
+.campus-route-chip.has-route {
+    border-width: 2px;
+    background: #ffffff;
+    color: #26313f;
+    font-weight: 700;
+}
+
+.campus-route-start-buttons {
+    display: grid;
+    margin-bottom: 8px;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.campus-route-start-buttons button {
+    min-height: 42px;
+    font-size: 12px;
+}
+
+.campus-route-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.campus-route-group h4 {
+    display: flex;
+    margin: 0 0 6px;
+    align-items: center;
+    gap: 6px;
+    color: #424b56;
+    font-size: 11px;
+}
+
+.campus-route-group h4 i {
+    width: 10px;
+    height: 10px;
+    flex: none;
+    border-radius: 3px;
+}
+
+.campus-route-row {
+    display: flex;
+    margin-bottom: 6px;
+    padding: 8px 10px;
+    flex-direction: column;
+    gap: 6px;
+    border: 1px solid #dce3eb;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.campus-route-row.is-selected {
+    border-color: #0755b5;
+    background: #eef4fd;
+}
+
+.campus-route-row > div:first-child {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.campus-route-row strong {
+    overflow-wrap: anywhere;
+    color: #283441;
+    font-size: 11px;
+}
+
+.campus-route-row span {
+    color: #737d89;
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.campus-route-row-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.campus-route-row-actions button {
+    min-height: 28px;
+    padding: 3px 10px;
+    border: 1px solid #d5dbe2;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #33475b;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.campus-route-row-actions button.is-danger {
+    color: #b42318;
+}
+
+.campus-route-title {
+    margin: 0 0 8px;
+    color: #1d3557;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.campus-route-stats {
+    display: grid;
+    margin-bottom: 8px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+}
+
+.campus-route-stats div {
+    display: flex;
+    padding: 8px 4px;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    border: 1px solid #dce3eb;
+    border-radius: 8px;
+    background: #f8fafc;
+}
+
+.campus-route-stats span {
+    color: #737d89;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.campus-route-stats strong {
+    color: #1d3557;
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
+}
+
+.campus-route-stats strong.is-good {
+    color: #127547;
+}
+
+.campus-route-stats strong.is-fair {
+    color: #b26a00;
+}
+
+.campus-route-stats strong.is-weak {
+    color: #b42318;
+}
+
+.campus-route-status {
+    margin: 0 0 4px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #f3f7fd;
+    color: #33475b;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.campus-route-points {
+    margin: 0 0 8px;
+    color: #737d89;
+    font-size: 10px;
+}
+
+.campus-route-big {
+    width: 100%;
+    min-height: 48px;
+    margin: 10px 0 6px;
+    font-size: 14px;
+}
+
+.campus-route-wide {
+    width: 100%;
+    min-height: 36px;
+    margin-top: 6px;
+}
+
+.campus-route-warnings {
+    margin: 0 0 8px;
+    padding: 8px 10px 8px 24px;
+    border: 1px solid #f5d38f;
+    border-radius: 8px;
+    background: #fff8e8;
+    color: #7a4b00;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.campus-route-warnings li + li {
+    margin-top: 4px;
+}
+
+.campus-route-toggle {
+    display: flex;
+    margin: 0 0 8px;
+    align-items: flex-start;
+    gap: 8px;
+    color: #33475b;
+    font-size: 11px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.campus-route-toggle input {
+    width: auto;
+    margin: 2px 0 0;
+    padding: 0;
+    flex: none;
+}
+
+.campus-route-toggle span {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.campus-route-resume {
+    display: flex;
+    margin-bottom: 10px;
+    padding: 10px 12px;
+    flex-direction: column;
+    gap: 6px;
+    border: 1px solid #f5d38f;
+    border-radius: 10px;
+    background: #fff8e8;
+    color: #7a4b00;
+    font-size: 11px;
+}
+
+@media (max-width: 1050px) {
+    /* While recording on a phone, a shorter map keeps the timer and I've arrived in view. */
+    .campus-setup-map.is-recording-route {
+        height: 45vh;
+        height: 45dvh;
+    }
+
+    /* Walking a route fills the screen (full view) with a shorter map, so the timer and
+       I've arrived sit right under it; the tabs and Save campus map wait until it is done. */
+    .campus-setup-layout.is-map-expanded.is-walking .campus-setup-map {
+        height: 50vh;
+        height: 50dvh;
+    }
+
+    .campus-setup-layout.is-walking .campus-mode-tabs,
+    .campus-setup-layout.is-walking .campus-setup-save {
+        display: none;
+    }
+
+    .campus-route-start-buttons button,
+    .campus-route-row-actions button {
+        min-height: 44px;
+    }
 }

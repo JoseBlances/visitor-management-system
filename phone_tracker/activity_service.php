@@ -315,6 +315,21 @@ function activity_describe(array $row): array
         case "department.deleted":
             return ["Deleted a department", "Deleted the unused " . $department . " department", "danger"];
 
+        case "campus.map_saved":
+            $gpsPins = (int) ($details["gps_pins"] ?? 0);
+            return ["Updated the campus map", "Saved the campus map: " . (int) ($details["corners"] ?? 0) . " boundary corners, "
+                . (int) ($details["gates"] ?? 0) . " gate(s), " . (int) ($details["offices"] ?? 0) . " department pin(s)"
+                . ($gpsPins > 0 ? ", " . $gpsPins . " placed by GPS" : ""), "info"];
+        case "campus.route_saved":
+            return ["Added a walking route", "Added the route \"" . ($details["name"] ?? "") . "\" ("
+                . (int) round((float) ($details["distance_meters"] ?? 0)) . " m, "
+                . (($details["method"] ?? "") === "drawn" ? "drawn on the map" : "walked with GPS") . ")", "good"];
+        case "campus.route_updated":
+            return ["Edited a walking route", "Edited the route \"" . ($details["name"] ?? "") . "\" ("
+                . (int) round((float) ($details["distance_meters"] ?? 0)) . " m)", "info"];
+        case "campus.route_deleted":
+            return ["Removed a walking route", "Removed the route \"" . ($details["name"] ?? "") . "\"", "warn"];
+
         case "auth.password_changed":
             return ["Changed their password", ($details["during"] ?? "") === "sign_in" ? "Set a new password while signing in" : "Changed it in Account security; other devices were signed out", "info"];
         case "auth.two_factor_enabled":

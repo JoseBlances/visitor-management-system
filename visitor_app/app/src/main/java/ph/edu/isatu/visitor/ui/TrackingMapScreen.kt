@@ -125,6 +125,7 @@ import ph.edu.isatu.visitor.data.CampusGateDto
 import ph.edu.isatu.visitor.data.CampusMapData
 import ph.edu.isatu.visitor.data.CampusStopDto
 import ph.edu.isatu.visitor.data.TrackingData
+import ph.edu.isatu.visitor.data.WalkingRouteDto
 import ph.edu.isatu.visitor.navigation.CampusArea
 import ph.edu.isatu.visitor.navigation.DistanceUnit
 import ph.edu.isatu.visitor.navigation.GeoMath
@@ -141,11 +142,17 @@ import ph.edu.isatu.visitor.navigation.HeadingSensor
 import ph.edu.isatu.visitor.navigation.LiveLocation
 import ph.edu.isatu.visitor.navigation.LocationFix
 import ph.edu.isatu.visitor.navigation.NavigationPreferences
+import ph.edu.isatu.visitor.navigation.RouteGuidance
 import ph.edu.isatu.visitor.navigation.TargetKind
 import ph.edu.isatu.visitor.navigation.VoiceGuide
+import ph.edu.isatu.visitor.navigation.WalkingPath
+import ph.edu.isatu.visitor.navigation.Walkway
+import ph.edu.isatu.visitor.navigation.WalkwayPlanner
 import ph.edu.isatu.visitor.navigation.displayDistance
+import ph.edu.isatu.visitor.navigation.routeInstruction
 import ph.edu.isatu.visitor.navigation.sideWords
 import ph.edu.isatu.visitor.navigation.walkingMinutes
+import ph.edu.isatu.visitor.navigation.walkingMinutesAlongPath
 
 /** What the campus visit screen needs to know about the visit itself. */
 data class CampusVisit(
@@ -279,6 +286,11 @@ fun TrackingMapScreen(
         }
     }
 
+    // The walking routes an administrator recorded, joined into one walkway network.
+    val planner = remember(campusMap?.walkingRoutes) {
+        WalkwayPlanner(campusMap?.walkingRoutes.orEmpty().mapNotNull { it.toWalkway() })
+    }
+
     // Where the visitor stood when they were checked in, as a way back without gate pins.
     var entryPoint by remember(visit.trackingAppointmentId) {
         mutableStateOf(preferences.entryPoint(visit.trackingAppointmentId))
@@ -301,11 +313,16 @@ fun TrackingMapScreen(
     val exitMode = exitRequested || allStopsDone
     val gates = campusMap?.gates.orEmpty()
     var chosenGate by rememberSaveable(visit.trackingAppointmentId, exitMode) { mutableStateOf<String?>(null) }
-    LaunchedEffect(exitMode, location != null, gates) {
+    LaunchedEffect(exitMode, location != null, gates, planner) {
         val here = location ?: return@LaunchedEffect
         if (exitMode && (chosenGate == null || gates.none { it.name == chosenGate })) {
-            chosenGate = gates.minByOrNull {
-                GeoMath.distanceMeters(GeoPoint(here.latitude, here.longitude), GeoPoint(it.latitude, it.longitude))
+            val from = GeoPoint(here.latitude, here.longitude)
+            // The gate nearest on foot along the walkways; a gate no walkway reaches counts as
+            // farther than it looks, since the way there is unknown.
+            chosenGate = gates.minByOrNull { gate ->
+                val point = GeoPoint(gate.latitude, gate.longitude)
+                planner.plan(from, point)?.lengthMeters
+                    ?: (GeoMath.distanceMeters(from, point) * WalkwayPlanner.OFF_WALKWAY_FACTOR)
             }?.name
         }
     }
@@ -326,15 +343,21 @@ fun TrackingMapScreen(
         val stopId = arrival.target.appointmentId ?: return
         onArrival(stopId, if (arrival.method == ArrivalMethod.GPS) "gps" else "visitor", arrival.distanceMeters, arrival.accuracyMeters)
     }
-    LaunchedEffect(location, target, campusArea, unit, arrivalRule) {
+    // The way to walk along the recorded walkways, planned again from every new position.
+    var walkingPath by remember { mutableStateOf<WalkingPath?>(null) }
+    LaunchedEffect(location, target, campusArea, unit, arrivalRule, planner) {
+        val fix = location?.toFix()
+        val goal = target?.point
+        walkingPath = if (fix != null && goal != null) planner.plan(fix.point, goal, walkingPath, target?.officeCode) else null
         applyGuidance(
             engine.update(
-                fix = location?.toFix(),
+                fix = fix,
                 compassHeading = headingSensor.heading.value?.toDouble(),
                 target = target,
                 campus = campusArea,
                 unit = unit,
                 arrival = arrivalRule,
+                path = walkingPath,
             ),
         )
     }
@@ -358,10 +381,11 @@ fun TrackingMapScreen(
     val markers = remember(campusMap, exitMode, target, entryPoint) {
         mapMarkers(campusMap, destination, exitMode, target, entryPoint)
     }
-    val pointerTo = target?.point?.takeIf {
-        snapshot.phase == GuidancePhase.NAVIGATING || snapshot.phase == GuidancePhase.WEAK_SIGNAL ||
-            snapshot.phase == GuidancePhase.VERY_CLOSE
-    }
+    val showDirections = snapshot.phase == GuidancePhase.NAVIGATING || snapshot.phase == GuidancePhase.WEAK_SIGNAL ||
+        snapshot.phase == GuidancePhase.VERY_CLOSE
+    // The walking path when walkways lead there; otherwise the dotted pointer straight at it.
+    val routeLine = walkingPath?.takeIf { showDirections }?.toRouteLine()
+    val pointerTo = target?.point?.takeIf { showDirections && routeLine == null }
     val mapModel = remember(boundary, markers, pointerTo) { CampusMapModel(boundary, markers, pointerTo) }
 
     var showPass by rememberSaveable { mutableStateOf(false) }
@@ -444,6 +468,7 @@ fun TrackingMapScreen(
                 onBearingChanged = { mapBearing = it },
                 onOfflineChanged = { mapOffline = it },
                 modifier = Modifier.fillMaxSize(),
+                route = routeLine,
             )
             // Keeps the status bar icons readable over the map.
             Box(
@@ -508,7 +533,7 @@ fun TrackingMapScreen(
                 MapButton(Icons.Rounded.ZoomOutMap, "Show the whole route") {
                     following = false
                     val here = location?.let { GeoPoint(it.latitude, it.longitude) }
-                    val points = listOfNotNull(here, target?.point)
+                    val points = walkingPath?.points ?: listOfNotNull(here, target?.point)
                     send(MapCommand.Overview(if (points.isEmpty()) boundary else points))
                 }
                 AnimatedVisibility(visible = !following) {
@@ -659,7 +684,12 @@ private fun GuidanceBanner(
                         OutsideCountdown(snapshot.outsideSinceMillis, exitSeconds)
                     }
                     GuidancePhase.NAVIGATING -> {
-                        NavigatingContent(snapshot, distance, accuracy, compass, mapBearing)
+                        val route = snapshot.route
+                        if (route != null) {
+                            RouteNavigatingContent(snapshot, route, accuracy, unit, compass, mapBearing)
+                        } else {
+                            NavigatingContent(snapshot, distance, accuracy, compass, mapBearing)
+                        }
                         if (canConfirm) BannerButton("I'm here", onImHere)
                     }
                 }
@@ -717,6 +747,58 @@ private fun NavigatingContent(snapshot: GuidanceSnapshot, distance: String?, acc
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (target.detail.isNotBlank()) {
+                Text(
+                    target.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Along a recorded walkway: what to do next ("Turn left in 20 m"), the walking distance left,
+ * and how sure GPS is. The arrow points along the path, so it turns before each corner.
+ */
+@Composable
+private fun RouteNavigatingContent(
+    snapshot: GuidanceSnapshot,
+    route: RouteGuidance,
+    accuracy: String?,
+    unit: DistanceUnit,
+    compass: Float?,
+    mapBearing: Float,
+) {
+    val target = snapshot.target ?: return
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        snapshot.bearingDegrees?.let { DirectionArrow(it, compass, mapBearing) }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                routeInstruction(route, unit),
+                fontSize = 21.sp,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "${displayDistance(route.remainingMeters, unit)} to ${target.name}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                // How sure GPS is right now, so a distance is never shown as more exact than it is.
+                accuracy?.let {
+                    Text("GPS $it", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.8f))
+                }
+            }
             if (target.detail.isNotBlank()) {
                 Text(
                     target.detail,
@@ -850,9 +932,12 @@ private fun VisitSheet(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 val distance = snapshot.distanceMeters
+                val route = snapshot.route
                 val headline = when {
                     snapshot.phase == GuidancePhase.ARRIVED -> "Arrived"
                     snapshot.phase == GuidancePhase.VERY_CLOSE -> "Very close"
+                    route != null && snapshot.phase == GuidancePhase.NAVIGATING ->
+                        "${walkingMinutesAlongPath(route.remainingMeters)} min walk · ${displayDistance(route.remainingMeters, unit)}"
                     distance != null && snapshot.phase == GuidancePhase.NAVIGATING ->
                         "${walkingMinutes(distance)} min walk · ${displayDistance(distance, unit)}"
                     else -> if (exitMode) "Heading out" else "Campus visit"
@@ -923,10 +1008,15 @@ private fun VisitSheet(
         }
         SheetSection("Directions") {
             Text(
-                if (exitMode) {
-                    "Guiding you to the way out. The dotted line points straight at it; follow the walkways."
-                } else {
-                    "The dotted line points straight at your office. Follow walkways and signs; buildings may be in the way."
+                when {
+                    snapshot.route != null && exitMode ->
+                        "Follow the blue line to the way out. It's a walking route recorded by ISATU, so it keeps to " +
+                            "the walkways. Turns are announced before you reach them."
+                    snapshot.route != null ->
+                        "Follow the blue line. It's a walking route recorded by ISATU, so it goes around buildings, " +
+                            "not through them. Turns are announced before you reach them."
+                    exitMode -> "Guiding you to the way out. The dotted line points straight at it; follow the walkways."
+                    else -> "The dotted line points straight at your office. Follow walkways and signs; buildings may be in the way."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MutedInk,
@@ -1204,6 +1294,7 @@ private fun guidanceTarget(
             destination.arrivalMethod == "visitor" -> ArrivalMethod.VISITOR
             else -> ArrivalMethod.GPS
         },
+        officeCode = destination.officeCode,
     )
 }
 
@@ -1267,6 +1358,22 @@ private fun rememberNow(): Long {
     return now
 }
 
+/** A recorded route as the planner uses it, or null when it has fewer than two points. */
+private fun WalkingRouteDto.toWalkway(): Walkway? {
+    val line = points.mapNotNull { pair -> if (pair.size >= 2) GeoPoint(pair[0], pair[1]) else null }
+    return if (line.size >= 2) Walkway(id, officeCode, name, line) else null
+}
+
+/** The part along walkways as a solid line; the straight legs onto and off them dotted. */
+private fun WalkingPath.toRouteLine(): RouteLine {
+    val walkway = points.subList(walkwayStart, walkwayEnd + 1).toList()
+    val connectors = buildList {
+        if (joinMeters >= CONNECTOR_MIN_METERS) add(points.subList(0, walkwayStart + 1).toList())
+        if (finishMeters >= CONNECTOR_MIN_METERS) add(points.subList(walkwayEnd, points.size).toList())
+    }
+    return RouteLine(walkway, connectors)
+}
+
 private fun Location.toFix() = LocationFix(
     point = GeoPoint(latitude, longitude),
     accuracyMeters = if (hasAccuracy()) accuracy.toDouble() else null,
@@ -1297,5 +1404,7 @@ private val BannerOrange = Color(0xFFC2410C)
 private val BannerTeal = Color(0xFF0F766E)
 /** "I'm here" is offered within this distance even while GPS still guides the visitor. */
 private const val CONFIRM_WITHIN_METERS = 30.0
+/** Straight legs onto and off a walkway shorter than this are not drawn. */
+private const val CONNECTOR_MIN_METERS = 2.0
 private val OfficeRed = Color(0xFFD92D20).toArgb()
 private val GateGreen = Color(0xFF15803D).toArgb()

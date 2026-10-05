@@ -157,7 +157,8 @@ $schemaChecks = [
     "app_users" => ["email", "session_version", "totp_secret", "first_name", "last_seen_at", "profile_image"],
     "appointments" => ["visit_id", "checkout_method", "arrived_at", "arrival_method"],
     "visitor_presence" => ["appointment_id"],
-    "campus_places" => ["place_type"],
+    "campus_places" => ["place_type", "placed_by"],
+    "campus_routes" => ["office_code", "points_json"],
     "offices" => ["code"],
     "outbound_emails" => ["status"],
     "api_access_tokens" => ["id"],
@@ -242,6 +243,13 @@ while ($office = $result->fetch_assoc()) {
 if ($unpinned) {
     preflight_line("WARN", "Not on the campus map yet: " . implode(", ", $unpinned) . ". Visitors to them get no walking directions.");
 }
+$activeDepartments = (int) preflight_scalar($conn, "SELECT COUNT(*) FROM offices WHERE is_active = 1");
+$routedDepartments = (int) preflight_scalar(
+    $conn,
+    "SELECT COUNT(DISTINCT r.office_code) FROM campus_routes r INNER JOIN offices o ON o.code = r.office_code AND o.is_active = 1"
+);
+preflight_line("INFO", "Walking routes: " . $routedDepartments . " of " . $activeDepartments
+    . " department(s) have one (record them in Campus Map > Routes).");
 
 // Background jobs: anything left waiting means the scheduler is not running.
 $stuckEmails = (int) preflight_scalar($conn, "SELECT COUNT(*) FROM outbound_emails WHERE status = 'queued' AND created_at < NOW() - INTERVAL 10 MINUTE");

@@ -8,7 +8,9 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import ph.edu.isatu.visitor.data.ApiEnvelope
 import ph.edu.isatu.visitor.data.AppointmentData
+import ph.edu.isatu.visitor.data.CampusMapData
 import ph.edu.isatu.visitor.data.VisitData
+import ph.edu.isatu.visitor.data.WalkingRouteDto
 import ph.edu.isatu.visitor.ui.formatTimeSpan
 import ph.edu.isatu.visitor.ui.statusLabel
 import ph.edu.isatu.visitor.ui.visitStatusLabel
@@ -157,5 +159,52 @@ class ApiModelTest {
     fun suggestedTimesShowRangeAndLength() {
         assertEquals("9:00 AM – 9:30 AM (30 min)", formatTimeSpan("2026-10-02 09:00:00", "2026-10-02 09:30:00"))
         assertEquals("On campus", visitStatusLabel("checked_in"))
+    }
+
+    private val campusMapType = com.google.gson.reflect.TypeToken.getParameterized(
+        ApiEnvelope::class.java,
+        CampusMapData::class.java,
+    ).type
+
+    @Test
+    fun campusMapCarriesTheRecordedWalkingRoutes() {
+        val json = """
+            {
+              "success": true,
+              "data": {
+                "appointment_id": 7,
+                "campus_configured": true,
+                "gates": [{"name": "Main Gate", "latitude": 10.685135, "longitude": 122.5121346}],
+                "stops": [],
+                "walking_routes": [
+                  {
+                    "id": 3,
+                    "office_code": "IT",
+                    "name": "Main Gate → IT Department",
+                    "start_label": "Main Gate",
+                    "distance_meters": 141.8,
+                    "points": [[10.685135, 122.5121346], [10.685603, 122.5121346], [10.686029, 122.5125698]]
+                  }
+                ]
+              }
+            }
+        """.trimIndent()
+        val map = gson.fromJson<ApiEnvelope<CampusMapData>>(json, campusMapType).data!!
+        val route = map.walkingRoutes.single()
+        assertEquals(3L, route.id)
+        assertEquals("IT", route.officeCode)
+        assertEquals("Main Gate", route.startLabel)
+        assertEquals(141.8, route.distanceMeters, 1e-9)
+        assertEquals(3, route.points.size)
+        assertEquals(10.686029, route.points.last()[0], 1e-9)
+        assertEquals(122.5125698, route.points.last()[1], 1e-9)
+    }
+
+    @Test
+    fun campusMapFromAnOlderServerHasNoWalkingRoutes() {
+        val json = """{"success": true, "data": {"appointment_id": 7, "campus_configured": true, "stops": []}}"""
+        val map = gson.fromJson<ApiEnvelope<CampusMapData>>(json, campusMapType).data!!
+        assertEquals(emptyList<WalkingRouteDto>(), map.walkingRoutes)
+        assertNull(map.destination)
     }
 }
