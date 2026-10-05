@@ -85,6 +85,12 @@ data class CampusMapModel(
     val pointerTo: GeoPoint? = null,
 )
 
+/**
+ * The walking path on the map: [walkway] along recorded walkways (a solid blue line with
+ * arrows), and [connectors], the short straight legs onto and off them (dotted).
+ */
+data class RouteLine(val walkway: List<GeoPoint>, val connectors: List<List<GeoPoint>>)
+
 sealed interface MapCommand {
     /** Show everything in [points] north-up, e.g. the visitor and their office. */
     data class Overview(val points: List<GeoPoint>) : MapCommand
@@ -97,8 +103,9 @@ data class MapCommandRequest(val id: Int, val command: MapCommand)
 
 /**
  * The campus map: OpenFreeMap tiles through MapLibre (no API key), the campus outline with
- * the outside dimmed, office and gate pins, the dotted pointer line, and the visitor's
- * arrow. While [following], the map turns with the visitor (heading-up, like a driver
+ * the outside dimmed, office and gate pins, the walking [route] (or the dotted pointer line
+ * where no walkway leads), and the visitor's arrow. While [following], the map turns with
+ * the visitor (heading-up, like a driver
  * app) and keeps them in the lower part of the screen; any drag hands control back to the
  * visitor through [onFollowDismissed]. If the map tiles can't load (no connection), it
  * switches to a plain background, keeps every overlay working, and reports it through
@@ -118,6 +125,7 @@ fun CampusMap(
     onBearingChanged: (Float) -> Unit,
     onOfflineChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    route: RouteLine? = null,
 ) {
     val context = LocalContext.current
     val mapView = remember {
@@ -196,7 +204,7 @@ fun CampusMap(
     LaunchedEffect(style) {
         val loadedMap = map ?: return@LaunchedEffect
         val loadedStyle = style ?: return@LaunchedEffect
-        addCampusLayers(loadedStyle)
+        addCampusLayers(context, loadedStyle)
         activateLocation(context, loadedMap, loadedStyle, headingSensor) { latestFollowDismissed() }
         if (!session.cameraPlaced) {
             session.cameraPlaced = true
@@ -238,6 +246,12 @@ fun CampusMap(
             FeatureCollection.fromFeatures(emptyList<Feature>())
         }
         loadedStyle.getSourceAs<GeoJsonSource>(SOURCE_POINTER)?.setGeoJson(line)
+    }
+
+    LaunchedEffect(style, route) {
+        val loadedStyle = style ?: return@LaunchedEffect
+        loadedStyle.getSourceAs<GeoJsonSource>(SOURCE_ROUTE)?.setGeoJson(lineFeatures(listOfNotNull(route?.walkway)))
+        loadedStyle.getSourceAs<GeoJsonSource>(SOURCE_ROUTE_LINKS)?.setGeoJson(lineFeatures(route?.connectors.orEmpty()))
     }
 
     LaunchedEffect(style, location) {
@@ -332,12 +346,15 @@ private class MapSession {
     var reportedBearing = 0f
 }
 
-private fun addCampusLayers(style: Style) {
+private fun addCampusLayers(context: Context, style: Style) {
     val empty = FeatureCollection.fromFeatures(emptyList<Feature>())
     if (style.getSourceAs<GeoJsonSource>(SOURCE_MASK) == null) style.addSource(GeoJsonSource(SOURCE_MASK, empty))
     if (style.getSourceAs<GeoJsonSource>(SOURCE_BOUNDARY) == null) style.addSource(GeoJsonSource(SOURCE_BOUNDARY, empty))
     if (style.getSourceAs<GeoJsonSource>(SOURCE_POINTER) == null) style.addSource(GeoJsonSource(SOURCE_POINTER, empty))
+    if (style.getSourceAs<GeoJsonSource>(SOURCE_ROUTE) == null) style.addSource(GeoJsonSource(SOURCE_ROUTE, empty))
+    if (style.getSourceAs<GeoJsonSource>(SOURCE_ROUTE_LINKS) == null) style.addSource(GeoJsonSource(SOURCE_ROUTE_LINKS, empty))
     if (style.getSourceAs<GeoJsonSource>(SOURCE_MARKERS) == null) style.addSource(GeoJsonSource(SOURCE_MARKERS, empty))
+    if (style.getImage(ROUTE_ARROW_IMAGE) == null) style.addImage(ROUTE_ARROW_IMAGE, routeArrowBitmap(context))
     if (style.getLayer(LAYER_MASK) == null) {
         style.addLayer(
             FillLayer(LAYER_MASK, SOURCE_MASK).withProperties(
@@ -364,6 +381,50 @@ private fun addCampusLayers(style: Style) {
                 PropertyFactory.lineDasharray(arrayOf(0.1f, 1.9f)),
                 PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                 PropertyFactory.lineOpacity(0.95f),
+            ),
+        )
+    }
+    // The walking path: a white edge under a bright blue line (unlike the darker campus
+    // outline), arrows along it toward the target, and dotted legs onto and off the walkway.
+    if (style.getLayer(LAYER_ROUTE_LINKS) == null) {
+        style.addLayer(
+            LineLayer(LAYER_ROUTE_LINKS, SOURCE_ROUTE_LINKS).withProperties(
+                PropertyFactory.lineColor(ROUTE_BLUE),
+                PropertyFactory.lineWidth(4.5f),
+                PropertyFactory.lineDasharray(arrayOf(0.1f, 1.9f)),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            ),
+        )
+    }
+    if (style.getLayer(LAYER_ROUTE_CASING) == null) {
+        style.addLayer(
+            LineLayer(LAYER_ROUTE_CASING, SOURCE_ROUTE).withProperties(
+                PropertyFactory.lineColor("#FFFFFF"),
+                PropertyFactory.lineWidth(10f),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            ),
+        )
+    }
+    if (style.getLayer(LAYER_ROUTE) == null) {
+        style.addLayer(
+            LineLayer(LAYER_ROUTE, SOURCE_ROUTE).withProperties(
+                PropertyFactory.lineColor(ROUTE_BLUE),
+                PropertyFactory.lineWidth(6.5f),
+                PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+                PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            ),
+        )
+    }
+    if (style.getLayer(LAYER_ROUTE_ARROWS) == null) {
+        style.addLayer(
+            SymbolLayer(LAYER_ROUTE_ARROWS, SOURCE_ROUTE).withProperties(
+                PropertyFactory.symbolPlacement(Property.SYMBOL_PLACEMENT_LINE),
+                PropertyFactory.symbolSpacing(46f),
+                PropertyFactory.iconImage(ROUTE_ARROW_IMAGE),
+                PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
+                PropertyFactory.iconAllowOverlap(true),
+                PropertyFactory.iconIgnorePlacement(true),
             ),
         )
     }
@@ -461,6 +522,35 @@ private fun boundsUpdate(points: List<GeoPoint>, top: Int, bottom: Int, side: In
         val bounds = LatLngBounds.Builder().includes(points.map { LatLng(it.latitude, it.longitude) }).build()
         CameraUpdateFactory.newLatLngBounds(bounds, 0.0, 0.0, side, top + side, side, bottom + side)
     }
+
+/** One line feature per polyline with at least two points. */
+private fun lineFeatures(lines: List<List<GeoPoint>>): FeatureCollection =
+    FeatureCollection.fromFeatures(
+        lines.filter { it.size >= 2 }.map { line ->
+            Feature.fromGeometry(LineString.fromLngLats(line.map { Point.fromLngLat(it.longitude, it.latitude) }))
+        },
+    )
+
+/** A white chevron pointing along the line; MapLibre turns it with the line it sits on. */
+private fun routeArrowBitmap(context: Context): Bitmap {
+    val density = context.resources.displayMetrics.density
+    val size = max(8, (12 * density).roundToInt())
+    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 2.2f * density
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    val chevron = Path().apply {
+        moveTo(size * 0.34f, size * 0.22f)
+        lineTo(size * 0.66f, size * 0.5f)
+        lineTo(size * 0.34f, size * 0.78f)
+    }
+    Canvas(bitmap).drawPath(chevron, paint)
+    return bitmap
+}
 
 private fun boundaryFeatures(boundary: List<GeoPoint>): FeatureCollection {
     if (boundary.size < 3) return FeatureCollection.fromFeatures(emptyList<Feature>())
@@ -620,10 +710,19 @@ private const val SOURCE_MASK = "isatu-campus-mask"
 private const val SOURCE_BOUNDARY = "isatu-campus-boundary"
 private const val SOURCE_POINTER = "isatu-pointer"
 private const val SOURCE_MARKERS = "isatu-markers"
+private const val SOURCE_ROUTE = "isatu-route"
+private const val SOURCE_ROUTE_LINKS = "isatu-route-links"
 private const val LAYER_MASK = "isatu-campus-mask-fill"
 private const val LAYER_BOUNDARY = "isatu-campus-boundary-line"
 private const val LAYER_POINTER = "isatu-pointer-line"
+private const val LAYER_ROUTE_LINKS = "isatu-route-link-line"
+private const val LAYER_ROUTE_CASING = "isatu-route-casing"
+private const val LAYER_ROUTE = "isatu-route-line"
+private const val LAYER_ROUTE_ARROWS = "isatu-route-arrows"
 private const val LAYER_MARKERS = "isatu-marker-symbols"
+private const val ROUTE_ARROW_IMAGE = "isatu-route-arrow"
+/** Brighter than the campus outline, so the path to follow stands out. */
+private const val ROUTE_BLUE = "#2563EB"
 private const val PROP_KEY = "key"
 private const val PROP_ICON = "icon"
 private const val PROP_ANCHOR = "anchor"

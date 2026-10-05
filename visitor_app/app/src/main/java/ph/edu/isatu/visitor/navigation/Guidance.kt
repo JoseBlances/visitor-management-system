@@ -32,6 +32,8 @@ data class GuidanceTarget(
     val startLine: String = "Heading to $name",
     val appointmentId: Long? = null,
     val arrivedBy: ArrivalMethod? = null,
+    /** The office code, so the walking path arrives along that office's own routes. */
+    val officeCode: String? = null,
 )
 
 /** One position reading. [timeMillis] is when the app received it. */
@@ -69,16 +71,35 @@ enum class GuidancePhase {
     OUTSIDE_CAMPUS,
 }
 
+/**
+ * Directions along recorded walkways (a [WalkingPath]); absent while the app points straight
+ * at the target because no walkway leads there.
+ */
+data class RouteGuidance(
+    /** Walking distance left along the path, including the way back onto it. */
+    val remainingMeters: Double,
+    /** How far the visitor is from the walkway. */
+    val offPathMeters: Double,
+    val nextTurn: TurnDirection? = null,
+    /** Walking distance to [nextTurn]. */
+    val nextTurnMeters: Double? = null,
+)
+
 data class GuidanceSnapshot(
     val phase: GuidancePhase,
     val target: GuidanceTarget? = null,
+    /** Straight-line distance to the target's pin. */
     val distanceMeters: Double? = null,
-    /** Compass direction from the visitor to the target. */
+    /**
+     * Compass direction to walk: along the walkway path when there is one, otherwise
+     * straight at the target.
+     */
     val bearingDegrees: Double? = null,
     val side: RelativeSide? = null,
     val accuracyMeters: Double? = null,
     val outsideSinceMillis: Long? = null,
     val arrivedBy: ArrivalMethod? = null,
+    val route: RouteGuidance? = null,
 )
 
 /** [urgent] prompts interrupt whatever is being said. */
@@ -114,6 +135,11 @@ data class GuidanceUpdate(
  *   6 s of another prompt. Readings worse than 50 m show a weak-signal notice.
  * - Outside the campus (past the server's 25 m allowance), directions pause and the
  *   visitor is warned once; coming back is acknowledged.
+ * - With a [WalkingPath] along the walkways an administrator recorded, directions follow
+ *   the path instead of a straight line: distances are walking distances, each turn is
+ *   announced ahead ("In 20 meters, turn left") and at the turn ("Turn left now"), and
+ *   wandering more than about 20 m off the path or walking the wrong way is pointed out.
+ *   Arrival is still judged at the pin itself.
  */
 class GuidanceEngine {
     private var targetKey: String? = null
@@ -130,6 +156,19 @@ class GuidanceEngine {
     private var lastPromptAt: Long? = null
     private var lastCorrectionAt: Long? = null
 
+    // Along a walkway path.
+    private var nextRouteMilestone = 0
+    private var closestRemaining = Double.MAX_VALUE
+    private var offPathStreak = 0
+    private var offPathWarned = false
+    private var justAheadSaid = false
+    private val announcedTurns = mutableListOf<AnnouncedTurn>()
+
+    private class AnnouncedTurn(val point: GeoPoint) {
+        var ahead = false
+        var atTurn = false
+    }
+
     fun update(
         fix: LocationFix?,
         compassHeading: Double?,
@@ -137,6 +176,7 @@ class GuidanceEngine {
         campus: CampusArea?,
         unit: DistanceUnit,
         arrival: ArrivalRule = ArrivalRule(),
+        path: WalkingPath? = null,
     ): GuidanceUpdate {
         val prompts = mutableListOf<VoicePrompt>()
         if (target?.key != targetKey) resetTarget(target)
@@ -158,11 +198,19 @@ class GuidanceEngine {
 
         val point = target?.point
         val distance = if (fix != null && point != null) GeoMath.distanceMeters(fix.point, point) else null
-        val bearing = if (fix != null && point != null) GeoMath.bearingDegrees(fix.point, point) else null
+        // A path only counts when it leads to this target.
+        val walkway = path?.takeIf { point != null && it.target == point }
+        val route = if (fix != null && walkway != null) routeGuidance(walkway) else null
+        val bearing = when {
+            fix == null || point == null -> null
+            // Along the path: toward a point a few meters ahead on it, so the arrow turns with it.
+            walkway != null -> GeoMath.bearingDegrees(fix.point, walkway.pointAt(walkway.joinMeters + LOOK_AHEAD_METERS))
+            else -> GeoMath.bearingDegrees(fix.point, point)
+        }
         val heading = chooseHeading(fix, compassHeading)
         val side = if (bearing != null && heading != null) sideFor(GeoMath.signedDifference(bearing, heading)) else null
         fun result(phase: GuidancePhase, event: ArrivalEvent? = null) = GuidanceUpdate(
-            GuidanceSnapshot(phase, target, distance, bearing, side, accuracy, outsideSince, arrivedBy),
+            GuidanceSnapshot(phase, target, distance, bearing, side, accuracy, outsideSince, arrivedBy, route),
             prompts,
             event,
         )
@@ -221,6 +269,10 @@ class GuidanceEngine {
 
         // Spoken directions only from readings good enough to be worth saying.
         if (!trustworthy) return result(GuidancePhase.NAVIGATING)
+        if (walkway != null && route != null) {
+            routePrompts(fix, target, walkway, route, heading, accuracy, unit, prompts)
+            return result(GuidancePhase.NAVIGATING)
+        }
         closestMeters = min(closestMeters, distance)
         if (!started) {
             started = true
@@ -278,7 +330,144 @@ class GuidanceEngine {
         closestMeters = Double.MAX_VALUE
         noPinAnnounced = false
         lastCorrectionAt = null
+        nextRouteMilestone = 0
+        closestRemaining = Double.MAX_VALUE
+        offPathStreak = 0
+        offPathWarned = false
+        justAheadSaid = false
+        announcedTurns.clear()
     }
+
+    /** Spoken directions along a walkway path: the opening line, turns, leaving it, the end. */
+    private fun routePrompts(
+        fix: LocationFix,
+        target: GuidanceTarget,
+        path: WalkingPath,
+        route: RouteGuidance,
+        heading: Double?,
+        accuracy: Double?,
+        unit: DistanceUnit,
+        prompts: MutableList<VoicePrompt>,
+    ) {
+        val now = fix.timeMillis
+        val remaining = route.remainingMeters
+        // Slight bends are shown on the banner but not spoken: recorded routes wiggle a little.
+        val turn = path.turns.firstOrNull { it.atMeters > TURN_PASSED_METERS && it.direction.isSpoken() }
+        val pathSide = if (heading != null && route.offPathMeters >= 1) {
+            sideFor(GeoMath.signedDifference(GeoMath.bearingDegrees(fix.point, path.pointAt(path.joinMeters)), heading))
+        } else {
+            null
+        }
+        val offPath = route.offPathMeters > offPathLimit(accuracy)
+        closestRemaining = min(closestRemaining, remaining)
+
+        if (!started) {
+            started = true
+            // A milestone close to the distance just spoken would only repeat it.
+            while (nextRouteMilestone < ROUTE_MILESTONES.size &&
+                ROUTE_MILESTONES[nextRouteMilestone] >= remaining - MILESTONE_REPEAT_METERS
+            ) {
+                nextRouteMilestone++
+            }
+            var text = "${target.startLine}. Follow the blue line, ${spokenDistance(remaining, unit)} to walk."
+            if (offPath) {
+                text += " " + pathLine(route.offPathMeters, pathSide, unit)
+            } else if (turn != null && turn.atMeters <= TURN_AHEAD_METERS) {
+                val record = announced(turn.point)
+                record.ahead = true
+                if (turn.atMeters <= TURN_NOW_METERS) {
+                    record.atTurn = true
+                    text += " " + turnNowLine(turn.direction)
+                } else {
+                    text += " " + turnAheadLine(turn, unit)
+                }
+            }
+            prompts += say(now, text)
+            return
+        }
+
+        // Off the path: said once, after a few readings, with the way back.
+        if (offPath) {
+            offPathStreak += 1
+            if (offPathStreak >= OFF_PATH_READINGS && !offPathWarned && canSpeak(now)) {
+                offPathWarned = true
+                prompts += say(now, "You're off the path. " + pathLine(route.offPathMeters, pathSide, unit))
+            }
+            return
+        }
+        offPathStreak = 0
+        if (offPathWarned && route.offPathMeters <= BACK_ON_PATH_METERS) {
+            offPathWarned = false
+            closestRemaining = remaining
+            if (canSpeak(now)) {
+                prompts += say(now, "You're back on the path.")
+                return
+            }
+        }
+
+        // Each turn: once ahead of time, and once at the turn.
+        if (turn != null) {
+            val record = announced(turn.point)
+            if (turn.atMeters <= TURN_NOW_METERS) {
+                if (!record.atTurn && canSpeakAtTurn(now)) {
+                    record.atTurn = true
+                    record.ahead = true
+                    prompts += say(now, turnNowLine(turn.direction), urgent = true)
+                    return
+                }
+            } else if (turn.atMeters <= TURN_AHEAD_METERS && !record.ahead && canSpeak(now)) {
+                record.ahead = true
+                prompts += say(now, turnAheadLine(turn, unit))
+                return
+            }
+        }
+
+        // Walking back along the path, away from the target.
+        if (remaining > closestRemaining + WRONG_WAY_METERS && canSpeak(now) &&
+            lastCorrectionAt.let { it == null || now - it >= CORRECTION_GAP_MILLIS }
+        ) {
+            lastCorrectionAt = now
+            closestRemaining = remaining
+            prompts += say(now, "You're going the wrong way. Turn around and follow the blue line.")
+            return
+        }
+
+        // The end of the path, once no turn is left before it.
+        val turnBeforeEnd = turn != null && turn.atMeters < remaining - TURN_PASSED_METERS
+        if (remaining <= JUST_AHEAD_METERS && !justAheadSaid && !turnBeforeEnd) {
+            if (canSpeak(now)) {
+                justAheadSaid = true
+                prompts += say(now, "${target.name} is just ahead.")
+            }
+            return
+        }
+
+        // Distance milestones, unless a turn is about to be announced.
+        val crossed = crossedRouteMilestone(remaining)
+        if (crossed != null && (turn == null || turn.atMeters > TURN_AHEAD_METERS) && canSpeak(now)) {
+            nextRouteMilestone = crossed + 1
+            prompts += say(now, "${spokenDistance(remaining, unit).replaceFirstChar { it.uppercase() }} to ${target.name}.")
+        }
+    }
+
+    /** The turn already announced at about this spot, or a new record for it. */
+    private fun announced(point: GeoPoint): AnnouncedTurn =
+        announcedTurns.firstOrNull { GeoMath.distanceMeters(it.point, point) <= SAME_TURN_METERS }
+            ?: AnnouncedTurn(point).also {
+                if (announcedTurns.size >= MAX_REMEMBERED_TURNS) announcedTurns.removeAt(0)
+                announcedTurns += it
+            }
+
+    private fun crossedRouteMilestone(remaining: Double): Int? {
+        var crossed: Int? = null
+        for (index in nextRouteMilestone until ROUTE_MILESTONES.size) {
+            if (remaining <= ROUTE_MILESTONES[index]) crossed = index
+        }
+        return crossed
+    }
+
+    /** A turn is due now: it may follow the last prompt more closely than other directions. */
+    private fun canSpeakAtTurn(now: Long): Boolean = lastPromptAt.let { it == null || now - it >= TURN_PROMPT_GAP_MILLIS }
 
     /** The smallest milestone not yet announced that the visitor is now within. */
     private fun crossedMilestone(distance: Double): Int? {
@@ -310,6 +499,36 @@ class GuidanceEngine {
         const val CORRECTION_GAP_MILLIS = 45_000L
         /** Moving faster than this, the walking direction is more reliable than the compass. */
         const val COURSE_MIN_SPEED = 0.8
+
+        /** Walking distances left (meters along the path) at which the distance is spoken. */
+        val ROUTE_MILESTONES = listOf(200.0, 100.0, 50.0)
+        /** Along a path, the arrow points at the path this far ahead of the visitor. */
+        const val LOOK_AHEAD_METERS = 6.0
+        /** A turn is announced once within this walking distance... */
+        const val TURN_AHEAD_METERS = 30.0
+        /** ...and again at the turn. */
+        const val TURN_NOW_METERS = 7.0
+        /** A turn this close is being taken, or was. */
+        const val TURN_PASSED_METERS = 2.0
+        const val TURN_PROMPT_GAP_MILLIS = 2_500L
+        /** Off the path: farther than this from it (more with a rough reading)... */
+        const val OFF_PATH_METERS = 20.0
+        /** ...for this many readings in a row. */
+        const val OFF_PATH_READINGS = 3
+        const val BACK_ON_PATH_METERS = 10.0
+        const val JUST_AHEAD_METERS = 25.0
+        private const val MILESTONE_REPEAT_METERS = 10.0
+        private const val SAME_TURN_METERS = 10.0
+        private const val MAX_REMEMBERED_TURNS = 24
+
+        /** How far from the path counts as off it: GPS error never makes a visitor "off the path". */
+        fun offPathLimit(accuracy: Double?): Double = max(OFF_PATH_METERS, (accuracy ?: 0.0) + 10.0)
+
+        /** Where the visitor stands on [path]: distance left, distance from it, the next turn. */
+        fun routeGuidance(path: WalkingPath): RouteGuidance {
+            val turn = path.turns.firstOrNull { it.atMeters > TURN_PASSED_METERS }
+            return RouteGuidance(path.lengthMeters, path.joinMeters, turn?.direction, turn?.atMeters)
+        }
 
         fun chooseHeading(fix: LocationFix?, compassHeading: Double?): Double? {
             val course = fix?.courseDegrees
@@ -370,6 +589,50 @@ fun sideWords(side: RelativeSide?): String = when (side) {
 
 private fun sideClause(side: RelativeSide?): String = if (side == null) "" else ", ${sideWords(side)}"
 
+/** Slight bends are shown but not spoken: a route recorded by walking wiggles a little. */
+fun TurnDirection.isSpoken(): Boolean = this != TurnDirection.SLIGHT_LEFT && this != TurnDirection.SLIGHT_RIGHT
+
+/** "turn left", "keep slightly right", "make a sharp left". */
+fun turnPhrase(direction: TurnDirection): String = when (direction) {
+    TurnDirection.SLIGHT_LEFT -> "keep slightly left"
+    TurnDirection.LEFT -> "turn left"
+    TurnDirection.SHARP_LEFT -> "make a sharp left"
+    TurnDirection.SLIGHT_RIGHT -> "keep slightly right"
+    TurnDirection.RIGHT -> "turn right"
+    TurnDirection.SHARP_RIGHT -> "make a sharp right"
+}
+
+/** "In 20 meters, turn left." */
+private fun turnAheadLine(turn: PathTurn, unit: DistanceUnit): String =
+    "In ${spokenDistance(turn.atMeters, unit)}, ${turnPhrase(turn.direction)}."
+
+/** "Turn left now.", or "Keep slightly left." for a bend. */
+private fun turnNowLine(direction: TurnDirection): String {
+    val phrase = turnPhrase(direction).replaceFirstChar { it.uppercase() }
+    return if (direction.isSpoken()) "$phrase now." else "$phrase."
+}
+
+/** "The path is 25 meters to your left." */
+private fun pathLine(meters: Double, side: RelativeSide?, unit: DistanceUnit): String =
+    if (side == null) "The path is ${spokenDistance(meters, unit)} away." else "The path is ${spokenDistance(meters, unit)} ${sideWords(side)}."
+
+/** The banner's instruction while following a walkway path, e.g. "Turn left in 20 m". */
+fun routeInstruction(route: RouteGuidance, unit: DistanceUnit): String {
+    val turn = route.nextTurn
+    val turnMeters = route.nextTurnMeters
+    return when {
+        route.offPathMeters > GuidanceEngine.OFF_PATH_METERS -> "Go back to the path, ${displayDistance(route.offPathMeters, unit)} away"
+        turn != null && turnMeters != null && turnMeters <= GuidanceEngine.TURN_NOW_METERS -> turnNowLine(turn).trimEnd('.')
+        turn != null && turnMeters != null && turnMeters <= TURN_SHOWN_METERS ->
+            "${turnPhrase(turn).replaceFirstChar { it.uppercase() }} in ${displayDistance(turnMeters, unit)}"
+        route.remainingMeters <= GuidanceEngine.JUST_AHEAD_METERS -> "Almost there"
+        else -> "Continue on the path"
+    }
+}
+
+/** The banner shows the next turn from this far away. */
+private const val TURN_SHOWN_METERS = 60.0
+
 private fun plural(count: Int, word: String): String = if (count == 1) word else "${word}s"
 
 private fun roundTo(value: Double, step: Int): Int = (value / step).roundToInt() * step
@@ -420,5 +683,8 @@ fun displayAccuracy(meters: Double, unit: DistanceUnit): String = when (unit) {
  * straight line, at an easy 1.25 m/s. Never less than one minute.
  */
 fun walkingMinutes(meters: Double): Int = max(1, ceil(meters * 1.3 / 1.25 / 60).toInt())
+
+/** Walking minutes for a distance along a walkway path, at an easy 1.25 m/s. Never less than one. */
+fun walkingMinutesAlongPath(meters: Double): Int = max(1, ceil(meters / 1.25 / 60).toInt())
 
 private const val FEET_PER_METER = 3.28084

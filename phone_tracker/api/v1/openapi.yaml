@@ -359,7 +359,11 @@ paths:
         Directory), latitude and longitude (null until an administrator places the pin), status,
         visit_type, scheduled_start_at, scheduled_end_at, and arrived_at and arrival_method once the
         arrival is recorded. destination is the first stop still to visit, and null once every stop is
-        done, when the app guides the visitor to a gate.
+        done, when the app guides the visitor to a gate. walking_routes lists every walking route an
+        administrator recorded (CAMPUS_ROUTES.md): id, office_code, name, start_label, distance_meters, and
+        points as [latitude, longitude] pairs from the route's start (usually a gate) to the office; it is
+        empty until campus_routes_migration.sql is imported. The app joins the routes into one walkway
+        network and guides the visitor along it.
       parameters:
         - in: query
           name: appointment_id

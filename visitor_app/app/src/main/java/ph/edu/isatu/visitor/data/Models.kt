@@ -364,6 +364,19 @@ data class CampusStopDto(
     val arrivalMethod: String? = null,
 )
 
+/**
+ * A walking route an administrator recorded in Campus Map → Routes. [points] are
+ * [latitude, longitude] pairs from the route's start (usually a gate) to the office.
+ */
+data class WalkingRouteDto(
+    val id: Long = 0,
+    val officeCode: String = "",
+    val name: String = "",
+    val startLabel: String = "",
+    val distanceMeters: Double = 0.0,
+    val points: List<List<Double>> = emptyList(),
+)
+
 /** The server's rules for confirming that a visitor left the campus. */
 data class ExitPolicyDto(
     val minimumAccuracyMeters: Double = 50.0,
@@ -384,6 +397,8 @@ data class CampusMapData(
     val gates: List<CampusGateDto> = emptyList(),
     val destination: CampusStopDto? = null,
     val stops: List<CampusStopDto> = emptyList(),
+    /** Every recorded walking route; the app guides along them (WalkwayPlanner). */
+    val walkingRoutes: List<WalkingRouteDto> = emptyList(),
     val exitPolicy: ExitPolicyDto = ExitPolicyDto(),
     /** GPS must place the visitor this close to the office pin to count as arrived. */
     val arrivalDistanceMeters: Double = 3.0,

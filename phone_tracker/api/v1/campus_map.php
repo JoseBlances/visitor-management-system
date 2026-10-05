@@ -78,6 +78,20 @@ $place = function (array $stop) use ($pins, $offices, $arrivals): array {
 };
 
 $stops = array_map($place, $stopRows);
+// Walking routes recorded in Campus Map → Routes (CAMPUS_ROUTES.md). The app joins them
+// into one walkway network, so it can guide along walkways to any office or gate instead
+// of in a straight line. Empty until campus_routes_migration.sql is imported.
+$walkingRoutes = array_map(function (array $route): array {
+    return [
+        "id" => $route["id"],
+        "office_code" => $route["office_code"],
+        "name" => $route["name"],
+        "start_label" => $route["start_label"],
+        "distance_meters" => $route["distance_meters"],
+        // [[latitude, longitude], ...] from the route's start (usually a gate) to the office.
+        "points" => $route["points"],
+    ];
+}, campus_routes_load($conn));
 // The destination is the first stop still to visit. Once every stop is done it is null,
 // and the app guides the visitor back to a gate.
 $destination = null;
@@ -104,6 +118,7 @@ api_success([
     }, $campus["gates"]),
     "destination" => $destination,
     "stops" => $stops,
+    "walking_routes" => $walkingRoutes,
     "exit_policy" => [
         "minimum_accuracy_meters" => PRESENCE_MAX_ACCURACY_METERS,
         "outside_confirmation_points" => PRESENCE_EXIT_MIN_READINGS,

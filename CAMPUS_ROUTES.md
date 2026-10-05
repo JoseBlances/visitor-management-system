@@ -89,18 +89,24 @@ Browsers share the location only with HTTPS pages or `localhost`.
 - **Permissions:** administrators can add, edit, and delete routes. Security can read them
   through `campus_routes.php`.
 
-## For the visitor app (not built yet)
+## In the visitor app
 
-The app still draws a straight pointer to the office (`VISITOR_NAVIGATION.md`), which can
-lead into a wall. When the app is updated:
+From app version 0.4.0, `api/v1/campus_map.php` sends every route (`walking_routes`), and
+the app guides visitors along them instead of pointing in a straight line
+(`VISITOR_NAVIGATION.md`, **Walking routes**):
 
-1. Add the routes for the visitor's stops to `phone_tracker/api/v1/campus_map.php`, using
-   `campus_routes_load()`.
-2. Pick the destination office's route whose line passes nearest to the visitor.
-3. Guide along that line from the nearest point on it. Voice prompts go at the turns
-   (where the direction changes by about 30° or more), plus "go back to the path" when the
-   visitor is more than about 15 m away from the line.
-4. Keep the straight pointer for departments that have no route yet.
+- All routes are joined into one walkway network, but only where they really meet: where
+  they cross, run side by side along the same walkway, start at the same gate, or where one
+  ends right on another. Routes on either side of a building are never joined.
+- The visitor sees a blue line with arrows from where they stand to the office, and hears
+  each turn ahead ("In 25 meters, turn left") and at the turn ("Turn left now"), plus "You're
+  off the path" and "You're going the wrong way" when needed.
+- One route helps more than its own office: going from one office to the next, or out with
+  **Guide me out** (to the gate nearest on foot), follows the routes that meet.
+- An office without a route keeps the dotted straight pointer, and arrival is still judged
+  at the office pin.
+- New or edited routes reach visitors the next time the app loads the campus map, with no
+  app update.
 
 ## Files
 
