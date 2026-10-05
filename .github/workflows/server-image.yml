@@ -105,9 +105,10 @@ jobs:
             if curl -fsS "$base/api/v1/health.php" > /dev/null; then break; fi
             sleep 3
           done
-          # The second start imports nothing ("up to date." without a file count).
+          # The second start imports nothing ("up to date." without a file count). The match
+          # is at the end of a line: output cut off by the stop can share its line.
           logs=$(docker logs web 2>&1)
-          grep -qxF "Database is up to date." <<< "$logs" || fail "After a restart, the database setup did not report up to date"
+          grep -qE 'Database is up to date\.$' <<< "$logs" || fail "After a restart, the database setup did not report up to date"
 
       - name: Startup log
         if: always()
