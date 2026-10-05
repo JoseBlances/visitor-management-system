@@ -39,11 +39,19 @@ JSON for this Android client file.
    - `phone_tracker/campus_map_migration.sql`
    - `phone_tracker/auth_security_migration.sql`
    - `phone_tracker/personnel_directory_migration.sql`
+   - `phone_tracker/live_monitoring_migration.sql`
+   - `phone_tracker/visitor_arrival_migration.sql`
 
    An existing database only needs the files it is missing. Every migration can be run
    again safely. Do not import `app_users_office_code_migration.sql`,
    `appointments_status_migration.sql`, or `phase1_workflow_migration.sql` into a new
    database; they only upgrade databases created before those changes.
+
+   Instead of importing by hand, you can run
+   `C:\xampp\php\php.exe phone_tracker\tools\setup_database.php`, which imports whatever
+   is missing in this order (and loads the ISATU campus map into an empty map). The online
+   server runs the same tool on every start. **When you add a migration**, append it both
+   to this list and to `SETUP_FILES` in `phone_tracker/tools/setup_database.php`.
 6. Open `http://localhost/visitor-management-system/` and test the staff website. The
    first sign-in is different now; see **Sign-in security** below.
 7. In Android Studio, open the `visitor_app` folder, not the repository root.
@@ -70,7 +78,8 @@ The full design is in `AUTH_SECURITY.md`. What you will notice:
   It expires after 24 hours; the user picks their own password when they sign in.
 - Five wrong attempts on one account from one device pause sign-in there for
   10 minutes (longer on repeats). An admin can unlock it on the **Security** page.
-- Sessions end after 30 minutes without activity and after 12 hours in total.
+- You stay signed in until you sign out, for up to 12 hours (one shift). Inactivity and
+  closing the browser no longer sign you out.
 
 Development machines only: to skip the admin authenticator step locally, copy
 `phone_tracker/config/auth.example.php` to `phone_tracker/config/auth.php` and set
@@ -128,6 +137,10 @@ Allow Apache through Windows Firewall on private networks. The emulator can keep
 default `10.0.2.2` address. Local HTTP is enabled only in debug builds; production must
 use HTTPS.
 
+The visitor's campus map uses free OpenFreeMap tiles and needs no map key. To use another
+MapLibre style, add `ISATU_MAP_STYLE_URL=...` to the same file. The phone needs internet for
+the map images; directions still work without them (`VISITOR_NAVIGATION.md`).
+
 ## Use the Security scanner from a phone
 
 The Security dashboard is a responsive web page, so guards do not need a separate
@@ -146,6 +159,7 @@ also use **Choose QR screenshot** for a saved test image. The website decodes th
 image on the phone and sends the pass to the same
 `scan_appointment.php` endpoint used by the desktop scanner. The resulting check-in
 is written to the central MySQL database and appears on the Security computer.
+Scanning the same pass again when the visitor leaves offers a one-tap **Check out**.
 
 Continuous live scanning is available on `localhost` and when the deployed site uses
 trusted HTTPS. For phone testing, use a QR shown on a second device and allow Apache
@@ -162,8 +176,9 @@ or emulator selected. The command-line verification used by the project owner is
 ```
 
 The debug APK is generated at
-`visitor_app/app/build/outputs/apk/debug/app-debug.apk`. Do not distribute the unsigned
-release APK as a production application.
+`visitor_app/app/build/outputs/apk/debug/app-debug.apk`. It is for testing only. The app
+handed to visitors is the signed release build that talks to the online server over
+HTTPS; `DEPLOYMENT.md` explains how to put the system online and build that app.
 
 ## Required acceptance workflow
 
@@ -175,9 +190,18 @@ release APK as a production application.
 6. Scan the appointment pass from Security during its valid window.
 7. Grant Android's one-time precise-location permission during signup. Keep the visitor
    pass open while Security scans it and confirm sharing starts automatically after check-in.
-8. Confirm Security sees the live marker and route updates.
+8. Confirm Security sees the visitor's arrow on **Visitor Monitoring**, and that selecting
+   them draws the path they walked. On the phone, confirm the campus map shows the office
+   pin, the distance, and spoken directions, and says "You have arrived" only when standing
+   on the pin (within about 3 m, outdoors); from farther away it says "very close" and offers
+   **I'm here**. Confirm Security shows **Arrived** and the office's status reads **Arrived**
+   (place the office's pin at its entrance in **Campus Map** first; see `VISITOR_NAVIGATION.md`).
 9. Disconnect the phone briefly, reconnect it, and confirm queued points upload.
-10. Complete the visit and confirm tracking stops and later uploads are rejected.
+10. Scan the same pass again in Security and press **Check out**. Confirm tracking stops
+    and later uploads are rejected.
+11. On another visit, carry the phone outside the campus boundary. Confirm the visitor
+    disappears from the map at once and the visit ends after 5 minutes outside, marked
+    **Left campus**.
 
 ### Multi-stop visit
 
@@ -192,7 +216,8 @@ release APK as a production application.
    Confirm it shows **Checked in** without another scan.
 5. From the first office, press **Mark meeting done**. Confirm the app moves to the next
    stop and GPS keeps uploading.
-6. Press **End visit** in Security. Confirm both stops are completed and tracking stops.
+6. Scan the visit pass again in Security and press **Check out**. Confirm both stops are
+   completed and tracking stops.
 7. Choose **Walk-in**, turn on **Visiting more than one office?**, and list two offices.
    Confirm the pass appears immediately and one scan checks in both offices.
 8. On another visit, have one office press **Suggest another time** with a single option.

@@ -9,6 +9,7 @@
  * If that file is lost, authenticator codes stop working but backup codes still do.
  */
 
+require_once __DIR__ . "/runtime.php";
 require_once __DIR__ . "/auth_config.php";
 
 const AUTH_BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -116,7 +117,18 @@ function auth_secret_key(): string
     if (is_string($key)) {
         return $key;
     }
-    $file = __DIR__ . "/config/auth_secret.php";
+    // A hosted server sets the key directly (64 hexadecimal characters), so redeploying can
+    // never lose it. Without it, the key lives in a file (ISATU_AUTH_SECRET_FILE, by default
+    // config/auth_secret.php), created on first use.
+    $fromEnvironment = strtolower(trim((string) isatu_env("ISATU_AUTH_SECRET", "")));
+    if ($fromEnvironment !== "") {
+        if (!preg_match('/^[a-f0-9]{64}$/', $fromEnvironment)) {
+            throw new RuntimeException("ISATU_AUTH_SECRET must be 64 hexadecimal characters.");
+        }
+        $key = hex2bin($fromEnvironment);
+        return $key;
+    }
+    $file = (string) isatu_env("ISATU_AUTH_SECRET_FILE", __DIR__ . "/config/auth_secret.php");
     if (!is_file($file)) {
         $contents = "<?php\n"
             . "// Generated automatically for two-step verification. Keep it private, back it up\n"

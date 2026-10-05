@@ -13,7 +13,7 @@
     // X-Auth-Error codes that mean the server ended this browser's session.
     const SESSION_END_MESSAGES = {
         not_authenticated: "Please sign in to continue.",
-        idle_timeout: "You were signed out after 30 minutes of inactivity.",
+        idle_timeout: "You were signed out after a period of inactivity.",
         session_expired: "Your session expired. Please sign in again.",
         session_revoked: "Your session was ended. Please sign in again.",
         locked: "Too many failed attempts. You were signed out to protect your account.",

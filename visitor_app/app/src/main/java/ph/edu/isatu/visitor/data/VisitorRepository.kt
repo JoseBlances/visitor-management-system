@@ -14,6 +14,7 @@ class VisitorRepository(
     private val tokenStore: SecureTokenStore,
     val installationStore: InstallationStore,
     private val locationQueue: LocationQueueDao,
+    private val campusMapCache: CampusMapCache,
 ) {
     val signedIn: StateFlow<Boolean> = tokenStore.signedIn
 
@@ -41,6 +42,7 @@ class VisitorRepository(
         } finally {
             tokenStore.clear()
             installationStore.clearActiveTracking()
+            campusMapCache.clear()
         }
     }
 
@@ -140,6 +142,26 @@ class VisitorRepository(
         apiClient.requireData(apiClient.api.updateConsent(ConsentActionRequest(appointmentId, "withdraw")))
         installationStore.clearActiveTracking()
     }
+
+    /** Gives location consent again after the visitor stopped sharing during a visit. */
+    suspend fun grantConsent(appointmentId: Long) {
+        apiClient.requireData(
+            apiClient.api.updateConsent(ConsentActionRequest(appointmentId, "grant", BuildConfig.CONSENT_VERSION)),
+        )
+    }
+
+    /** The campus map for a visit; the last copy is kept for moments without a connection. */
+    suspend fun campusMap(appointmentId: Long): CampusMapData {
+        val map = apiClient.requireData(apiClient.api.campusMap(appointmentId))
+        campusMapCache.save(map)
+        return map
+    }
+
+    fun cachedCampusMap(appointmentId: Long): CampusMapData? = campusMapCache.load(appointmentId)
+
+    /** Tells the server (and so Security and the office) that the visitor reached a stop. */
+    suspend fun reportArrival(request: ArrivalRequest): ArrivalData =
+        apiClient.requireData(apiClient.api.reportArrival(request))
 
     suspend fun queueLocation(appointmentId: Long, sessionId: Long, location: Location) {
         locationQueue.insert(

@@ -142,6 +142,64 @@ fun formatTimeSpan(start: String, end: String): String {
     return if (minutes != null && minutes > 0) "$range ($minutes min)" else range
 }
 
+private val ManilaZone: java.time.ZoneId = java.time.ZoneId.of("Asia/Manila")
+
+/** A server time ("yyyy-MM-dd HH:mm:ss", Philippine time) as epoch milliseconds. */
+fun serverTimeMillis(value: String?): Long? = value?.takeIf { it.isNotBlank() }?.let {
+    runCatching {
+        java.time.LocalDateTime.parse(it.trim().replace(' ', 'T')).atZone(ManilaZone).toInstant().toEpochMilli()
+    }.getOrNull()
+}
+
+/** "under a minute", "25 min", "2 h", or "1 h 41 min". */
+fun formatDuration(millis: Long): String {
+    val minutes = millis / 60_000
+    return when {
+        minutes < 1 -> "under a minute"
+        minutes < 60 -> "$minutes min"
+        minutes % 60 == 0L -> "${minutes / 60} h"
+        else -> "${minutes / 60} h ${minutes % 60} min"
+    }
+}
+
+/** How a finished visit ended, for the visitor. */
+fun checkoutSummary(method: String?): Pair<String, String> = when (method) {
+    "scan" -> "Checked out at the gate" to "Checked out"
+    "guard" -> "Visit ended by Security" to "Ended"
+    "left_campus" -> "Visit ended when you left the campus" to "Left campus"
+    "end_of_day" -> "Visit closed at the end of the day" to "Closed"
+    else -> "Visit ended" to "Ended"
+}
+
+/** Shown after a visit ends: when it started and ended, how long it took, and how it ended. */
+@Composable
+fun VisitSummaryCard(checkedInAt: String, completedAt: String?, checkoutMethod: String?) {
+    val (title, endLabel) = checkoutSummary(checkoutMethod)
+    val start = serverTimeMillis(checkedInAt)
+    val end = serverTimeMillis(completedAt)
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+        border = BorderStroke(1.dp, Color(0xFFB7E1C1)),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = IsatuGreen)
+            SummaryLine("Checked in", formatTimeOfDay(checkedInAt))
+            completedAt?.let { SummaryLine(endLabel, formatTimeOfDay(it)) }
+            if (start != null && end != null && end >= start) SummaryLine("Time on campus", formatDuration(end - start))
+            Text("Thank you for visiting ISATU.", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun SummaryLine(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, color = MutedInk)
+        Text(value, fontWeight = FontWeight.SemiBold)
+    }
+}
+
 /** Label for a multi-stop visit's own status. */
 fun visitStatusLabel(status: String): String = when (status) {
     "open" -> "Upcoming"

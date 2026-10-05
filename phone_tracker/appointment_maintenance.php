@@ -1,25 +1,34 @@
 <?php
 
 require_once __DIR__ . "/visit_service.php";
+require_once __DIR__ . "/presence_service.php";
 
 /**
  * Applies time-based appointment and multi-stop visit outcomes. This is safe to call
  * from read APIs; each update includes the previous status so a record changes once.
+ * Must not be called inside an open transaction (visit endings start their own).
  */
 function refresh_appointment_time_states(mysqli $conn): void
 {
     refresh_appointment_stop_time_states($conn);
     refresh_visit_states($conn);
+    refresh_presence_exits($conn);
+    refresh_checked_in_end_of_day($conn);
 }
 
 function refresh_appointment_stop_time_states(mysqli $conn): void
 {
     $visitColumns = visit_appointment_columns($conn);
+    // Checked-in single appointments are skipped: see the comment in the loop below.
+    $skipOnCampus = visit_schema_ready($conn)
+        ? "AND NOT (status = 'checked_in' AND visit_id IS NULL)"
+        : "AND status <> 'checked_in'";
     $result = $conn->query(
         "SELECT id, visitor_user_id, status, scheduled_end_at{$visitColumns}
          FROM appointments
          WHERE scheduled_end_at < NOW()
            AND status IN ('pending_approval', 'approved', 'checked_in')
+           {$skipOnCampus}
          ORDER BY id ASC
          LIMIT 200"
     );
@@ -32,6 +41,13 @@ function refresh_appointment_stop_time_states(mysqli $conn): void
         $visitorUserId = (int) $appointment["visitor_user_id"];
         $fromStatus = (string) $appointment["status"];
         $isVisitStop = !empty($appointment["visit_id"]);
+        // A checked-in visitor is still on campus when their slot ends. Their visit ends
+        // at the gate, on a confirmed campus exit, or at the end of the day
+        // (presence_service.php). A multi-office stop still completes here because the
+        // visit itself continues.
+        if ($fromStatus === "checked_in" && !$isVisitStop) {
+            continue;
+        }
         $toStatus = "";
         $note = "";
         $extraSet = "";

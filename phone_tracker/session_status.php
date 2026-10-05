@@ -25,6 +25,8 @@ echo json_encode([
     "two_factor_enabled" => $user["two_factor_enabled"],
     "two_factor_required" => auth_two_factor_required_for($user["role"]),
     "auth_method" => (string) ($_SESSION["auth_method"] ?? "password"),
-    "idle_timeout_seconds" => AUTH_IDLE_TIMEOUT_SECONDS,
-    "session_expires_at" => date("c", (int) $_SESSION["login_at"] + AUTH_ABSOLUTE_TIMEOUT_SECONDS),
+    "idle_timeout_seconds" => auth_idle_timeout_seconds(),
+    "session_expires_at" => auth_session_max_seconds() > 0
+        ? date("c", (int) $_SESSION["login_at"] + auth_session_max_seconds())
+        : null,
 ]);

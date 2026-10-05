@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require_once __DIR__ . "/_bootstrap.php";
 require_once dirname(__DIR__, 2) . "/visit_service.php";
+require_once dirname(__DIR__, 2) . "/presence_service.php";
 
 api_require_method("POST");
 $user = api_require_visitor();
@@ -70,6 +71,7 @@ $checkedInAt = strtotime((string) $session["checked_in_at"]);
 $latestAllowed = $appointmentStatus === "completed" && $completedAt ? $completedAt : time() + 300;
 $validated = [];
 $errors = [];
+$afterVisit = 0;
 foreach ($points as $index => $point) {
     if (!is_array($point)) {
         $errors[(string) $index] = "Point must be an object";
@@ -88,6 +90,9 @@ foreach ($points as $index => $point) {
         $errors[(string) $index] = "Coordinates are invalid";
     } elseif ($accuracy !== null && (!is_numeric($accuracy) || (float) $accuracy < 0 || (float) $accuracy > 10000)) {
         $errors[(string) $index] = "Accuracy is invalid";
+    } elseif ($appointmentStatus === "completed" && $captured && $captured > $latestAllowed) {
+        // Recorded after the visit ended (checked out or left campus): never stored.
+        $afterVisit++;
     } elseif (!$captured || $captured < $checkedInAt || $captured > $latestAllowed) {
         $errors[(string) $index] = "captured_at is outside the active visit";
     } else {
@@ -103,9 +108,28 @@ foreach ($points as $index => $point) {
 if ($errors) {
     api_fail("One or more location points are invalid", 422, ["points" => $errors]);
 }
+if (!$validated && $afterVisit > 0) {
+    // 409 tells the app to stop tracking instead of retrying.
+    api_fail("This visit has ended, so location sharing has stopped.", 409);
+}
+
+// Privacy: a position outside the campus boundary is never stored. It only tells the
+// server that the visitor is outside (presence_service.php).
+$campus = presence_campus($conn);
+$readings = [];
+$insidePoints = [];
+foreach ($validated as $point) {
+    $inside = presence_is_inside($campus, $point["latitude"], $point["longitude"]);
+    $readings[] = ["captured_at" => $point["captured_at"], "inside" => $inside, "accuracy" => $point["accuracy"]];
+    if ($inside) {
+        $insidePoints[] = $point;
+    }
+}
+$outsideCampus = count($validated) - count($insidePoints);
 
 $inserted = 0;
 $duplicates = 0;
+$presence = null;
 $conn->begin_transaction();
 try {
     $insert = $conn->prepare(
@@ -114,7 +138,7 @@ try {
           latitude, longitude, accuracy, captured_at, received_at, recorded_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)"
     );
-    foreach ($validated as $point) {
+    foreach ($insidePoints as $point) {
         $eventId = $point["event_id"];
         $deviceName = (string) $session["device_name"];
         $latitude = $point["latitude"];
@@ -134,13 +158,16 @@ try {
         }
     }
     $insert->close();
+    if ($appointmentStatus === "checked_in") {
+        $presence = presence_record($conn, $appointmentId, $readings);
+    }
     $touch = $conn->prepare("UPDATE location_tracking_sessions SET last_upload_at = NOW() WHERE id = ?");
     $touch->bind_param("i", $sessionId);
     $touch->execute();
     $touch->close();
     if ($appointmentStatus === "completed") {
         $end = $conn->prepare(
-            "UPDATE location_tracking_sessions SET ended_at = COALESCE(ended_at, ?), ended_reason = 'completed' WHERE id = ?"
+            "UPDATE location_tracking_sessions SET ended_at = COALESCE(ended_at, ?), ended_reason = COALESCE(ended_reason, 'completed') WHERE id = ?"
         );
         $completedSql = (string) $session["completed_at"];
         $end->bind_param("si", $completedSql, $sessionId);
@@ -150,12 +177,26 @@ try {
     $conn->commit();
 } catch (Throwable $error) {
     $conn->rollback();
+    error_log("Location batch failed for tracking session {$sessionId}: " . $error->getMessage() . " in " . $error->getFile() . ":" . $error->getLine());
     api_fail("Could not save the location batch", 500);
+}
+
+// A confirmed campus exit ends the visit, as the app promises the visitor. The next
+// upload is then refused and the app stops tracking.
+$visitEnded = false;
+if (presence_exit_confirmed($presence)) {
+    try {
+        $visitEnded = (bool) gate_checkout($conn, $appointmentId, null, "left_campus", (string) $presence["outside_since"]);
+    } catch (Throwable $error) {
+        error_log("Campus-exit check-out failed for appointment {$appointmentId}: " . $error->getMessage());
+    }
 }
 api_success([
     "tracking_session_id" => $sessionId,
     "accepted" => $inserted,
     "duplicates" => $duplicates,
+    "outside_campus" => $outsideCampus,
+    "visit_ended" => $visitEnded,
     "server_time" => date("Y-m-d H:i:s"),
 ], 200, "Location batch processed");
 

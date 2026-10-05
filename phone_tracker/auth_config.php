@@ -10,9 +10,7 @@ const AUTH_SESSION_NAME = "ISATU_VMS_SESSION";
 const AUTH_CSRF_COOKIE = "ISATU_VMS_CSRF";
 const AUTH_TRUSTED_DEVICE_COOKIE = "ISATU_VMS_DEVICE";
 
-// Sessions
-const AUTH_IDLE_TIMEOUT_SECONDS = 1800;      // signed out after 30 minutes without activity
-const AUTH_ABSOLUTE_TIMEOUT_SECONDS = 43200; // and always after 12 hours (one shift)
+// Sessions (how long people stay signed in is set in auth_config() below)
 const AUTH_PENDING_TIMEOUT_SECONDS = 600;    // time allowed to finish the extra sign-in steps
 const AUTH_STEP_UP_SECONDS = 900;            // "Confirm it's you" stays valid for 15 minutes
 
@@ -61,6 +59,12 @@ function auth_config(): array
         // Roles that must use two-step verification. Only remove "admin" on a
         // development machine, never on the deployed server.
         "two_factor_required_roles" => ["admin"],
+        // Minutes without any activity before someone is signed out. 0 = never: people
+        // stay signed in until they sign out or session_max_hours is reached.
+        "idle_timeout_minutes" => 0,
+        // Everyone signs in again this many hours after signing in (one shift).
+        // 0 = no limit, which is not recommended.
+        "session_max_hours" => 12,
     ];
     $localFile = __DIR__ . "/config/auth.php";
     if (is_file($localFile)) {
@@ -70,6 +74,18 @@ function auth_config(): array
         }
     }
     return $config;
+}
+
+/** Seconds without activity before a session ends; 0 means inactivity never ends it. */
+function auth_idle_timeout_seconds(): int
+{
+    return max(0, min(1440, (int) auth_config()["idle_timeout_minutes"])) * 60;
+}
+
+/** Seconds after sign-in when a session always ends; 0 means no limit. */
+function auth_session_max_seconds(): int
+{
+    return max(0, min(720, (int) auth_config()["session_max_hours"])) * 3600;
 }
 
 function auth_two_factor_required_for(string $role): bool

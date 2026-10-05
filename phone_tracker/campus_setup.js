@@ -213,11 +213,11 @@
             showMessage("The map library could not load. Check your internet connection and refresh the page.", true);
             return;
         }
-        state.map = L.map("campusSetupMap", { doubleClickZoom: false }).setView([10.7177, 122.5559], 17);
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-            maxZoom: 19,
-            attribution: "&copy; OpenStreetMap contributors",
-        }).addTo(state.map);
+        state.map = L.map("campusSetupMap", CampusMap.mapOptions({ doubleClickZoom: false })).setView([10.7177, 122.5559], 17);
+        CampusMap.addBaseLayer(state.map);
+        CampusMap.addScale(state.map);
+        // Full view keeps the tools panel beside the map, for placing pins precisely.
+        CampusMap.addExpandControl(state.map, document.querySelector(".campus-setup-layout"));
         state.editLayer = L.layerGroup().addTo(state.map);
         state.map.on("click", handleMapClick);
         render();

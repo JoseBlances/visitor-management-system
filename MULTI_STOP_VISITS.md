@@ -41,9 +41,10 @@ the existing tracking, route-history, and retention code is reused unchanged.
   campus, joins the active check-in without another scan.
 - An office marks its stop done with **Mark meeting done**. Tracking continues because the
   visitor is still on campus.
-- The visit ends when Security presses **End visit** (stops still waiting for an office
-  decision are then cancelled), or automatically at the scheduled end of the last attended
-  stop.
+- The visit ends when Security scans the visit pass a second time at the gate (or presses
+  **End visit**); stops still waiting for an office decision are then cancelled and their
+  offices told the visitor left. It also ends on a confirmed campus exit or at the end of
+  the day. See `LIVE_MONITORING.md`.
 - If an office suggests a time for a stop, it must fit around the visitor's other stops.
   A time on a different day moves that stop out of the visit, and it gets its own pass.
 - A visit closes automatically when none of its stops can happen (all declined, cancelled,

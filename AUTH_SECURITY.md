@@ -49,7 +49,12 @@ checks count too.
 
 - Cookie `ISATU_VMS_SESSION`: HttpOnly, SameSite=Strict, Secure over HTTPS, new ID after
   every sign-in step, strict mode on.
-- Ends after 30 minutes without requests and 12 hours after sign-in.
+- Stays signed in until the user signs out, for at most 12 hours after sign-in (one
+  shift). Inactivity alone signs nobody out, and closing the browser does not either: the
+  cookie lasts as long as the session. Both limits are settings in `config/auth.php`
+  (`idle_timeout_minutes`, default 0 = off; `session_max_hours`, default 12).
+- Sessions are stored in their own folder (`isatu_vms_sessions` inside PHP's session
+  folder), so other PHP apps on the server, such as phpMyAdmin, cannot delete them early.
 - The account is re-checked on every request. Suspending, deleting, resetting a password
   or two-step, or "Sign out everywhere" ends the user's open sessions immediately
   (`app_users.session_version`).

@@ -29,7 +29,7 @@
 
     document.getElementById("logoutBtn").addEventListener("click", function () {
         PhoneTrackerAuth.logout().then(function () {
-            window.location.href = "login.html?v=20260917-3";
+            window.location.href = "login.html?v=20261004-1";
         });
     });
 
@@ -73,8 +73,14 @@
     const overrideMinutes = document.getElementById("qrOverrideMinutes");
     const overrideError = document.getElementById("qrOverrideError");
     const confirmOverrideBtn = document.getElementById("confirmQrOverrideBtn");
+    const checkoutPanel = document.getElementById("checkoutPanel");
+    const checkoutStay = document.getElementById("checkoutStay");
+    const checkoutWarnings = document.getElementById("checkoutWarnings");
+    const confirmCheckoutBtn = document.getElementById("confirmCheckoutBtn");
 
     let scanner = null;
+    // The pass waiting for the guard to confirm its check-out (second scan).
+    let pendingCheckout = null;
     let scannerRunning = false;
     let scannerPaused = false;
     let scanLocked = false;
@@ -135,7 +141,31 @@
         setImageScanDisabled(false);
     }
 
+    function hideCheckout() {
+        pendingCheckout = null;
+        checkoutPanel.hidden = true;
+        checkoutStay.hidden = true;
+        checkoutWarnings.hidden = true;
+        checkoutWarnings.replaceChildren();
+    }
+
+    /** "45 seconds", "12 minutes", "1 hour 5 min". */
+    function formatDuration(seconds) {
+        const value = Math.max(0, Math.round(Number(seconds) || 0));
+        if (value < 60) {
+            return value + " second" + (value === 1 ? "" : "s");
+        }
+        const minutes = Math.floor(value / 60);
+        if (minutes < 60) {
+            return minutes + " minute" + (minutes === 1 ? "" : "s");
+        }
+        const hours = Math.floor(minutes / 60);
+        const rest = minutes % 60;
+        return hours + " hour" + (hours === 1 ? "" : "s") + (rest ? " " + rest + " min" : "");
+    }
+
     function showReadyResult() {
+        hideCheckout();
         scanResult.className = "security-scan-result is-ready";
         scanResultLabel.textContent = "Scanner ready";
         scanResultTitle.textContent = "Waiting for a visitor pass";
@@ -150,6 +180,7 @@
     }
 
     function showProcessingResult() {
+        hideCheckout();
         scanResult.className = "security-scan-result is-processing";
         scanResultLabel.textContent = "Checking pass";
         scanResultTitle.textContent = "Please wait...";
@@ -215,6 +246,9 @@
 
     function errorPresentation(message, data) {
         const normalizedMessage = String(message || "").toLowerCase();
+        if (data && data.action === "already_checked_out") {
+            return { label: "Already checked out", title: "This visit has already ended" };
+        }
         if (data && data.window_state === "too_early") {
             return {
                 label: "Pass not active yet",
@@ -252,6 +286,7 @@
     }
 
     function showErrorResult(message, data) {
+        hideCheckout();
         const presentation = errorPresentation(message, data);
         scanResult.className = "security-scan-result is-error";
         scanResultLabel.textContent = presentation.label;
@@ -267,19 +302,107 @@
     }
 
     function showSuccessResult(data) {
+        hideCheckout();
         const alreadyCheckedIn = Boolean(data.already_checked_in);
         scanResult.className = "security-scan-result is-success";
         scanResultLabel.textContent = alreadyCheckedIn ? "Already checked in" : "Check-in complete";
-        scanResultTitle.textContent = alreadyCheckedIn ? "This pass was already used" : "Visitor checked in successfully";
+        scanResultTitle.textContent = alreadyCheckedIn ? "This visitor was just checked in" : "Visitor checked in successfully";
         scanResultText.textContent = alreadyCheckedIn
-            ? "Status: Active. No duplicate check-in was created."
-            : "Status: Active. Time in was recorded and the visitor app can now start campus tracking.";
+            ? (data.message || "No duplicate check-in was created.")
+            : "Status: Active. Time in was recorded and the visitor app can now start campus tracking. Scan this pass again when they leave.";
         updateResultDetails(data);
         openOverrideBtn.hidden = true;
         scanNextBtn.textContent = "Scan next visitor";
         scanNextBtn.hidden = false;
         pendingOverride = null;
         revealScanResult();
+    }
+
+    /** Second scan of a pass: the guard confirms the check-out with one tap. */
+    function showCheckoutResult(data) {
+        hideCheckout();
+        const info = data.checkout || {};
+        const name = info.visitor_full_name || data.visitor_full_name || "this visitor";
+        scanResult.className = "security-scan-result is-checkout";
+        scanResultLabel.textContent = "Ready to check out";
+        scanResultTitle.textContent = "Check out " + name + "?";
+        scanResultText.textContent = "On campus for " + formatDuration(info.seconds_on_campus)
+            + (info.checked_in_by ? ". Checked in by " + info.checked_in_by : "") + ".";
+        updateResultDetails(Object.assign({}, data, {
+            appointment_id: info.appointment_id || data.appointment_id,
+            office_label: info.office_label || data.office_label,
+            qr_valid_from: null,
+            qr_valid_until: null,
+        }));
+        if (Number(info.minutes_past_slot) > 0) {
+            checkoutStay.textContent = "Stayed " + formatDuration(info.minutes_past_slot * 60) + " past their booked slot.";
+            checkoutStay.hidden = false;
+        }
+        (info.warnings || []).forEach(function (warning) {
+            const item = document.createElement("li");
+            item.textContent = warning;
+            checkoutWarnings.appendChild(item);
+        });
+        checkoutWarnings.hidden = !(info.warnings && info.warnings.length);
+        pendingCheckout = { token: lastSentToken, name: name };
+        checkoutPanel.hidden = false;
+        openOverrideBtn.hidden = true;
+        scanNextBtn.textContent = "Not now";
+        scanNextBtn.hidden = false;
+        revealScanResult();
+        window.setTimeout(function () { confirmCheckoutBtn.focus({ preventScroll: true }); }, 60);
+    }
+
+    function showCheckedOutResult(data) {
+        hideCheckout();
+        scanResult.className = "security-scan-result is-success";
+        scanResultLabel.textContent = "Checked out";
+        scanResultTitle.textContent = (data.visitor_full_name || "Visitor") + " checked out";
+        scanResultText.textContent = data.message || "Time out was recorded and location tracking has stopped.";
+        updateResultDetails({
+            appointment_id: data.appointment_id,
+            visitor_full_name: data.visitor_full_name,
+            office_label: data.office_label,
+            checked_in_at: data.checked_in_at,
+        });
+        openOverrideBtn.hidden = true;
+        scanNextBtn.textContent = "Scan next visitor";
+        scanNextBtn.hidden = false;
+        revealScanResult();
+    }
+
+    function confirmCheckout() {
+        if (!pendingCheckout) {
+            return;
+        }
+        const checkout = pendingCheckout;
+        confirmCheckoutBtn.disabled = true;
+        confirmCheckoutBtn.querySelector("span").textContent = "Checking out…";
+        fetch("scan_checkout.php", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token: checkout.token }),
+        })
+            .then(function (response) {
+                return response.json().catch(function () {
+                    throw new Error("The check-out service returned an invalid response. Please try again.");
+                });
+            })
+            .then(function (data) {
+                if (data && data.success) {
+                    showCheckedOutResult(data);
+                } else {
+                    showErrorResult((data && data.message) || "Could not check out this visitor.", data);
+                }
+            })
+            .catch(function (error) {
+                showErrorResult(error.message || "Could not reach the server. Please try again.", null);
+            })
+            .finally(function () {
+                confirmCheckoutBtn.disabled = false;
+                confirmCheckoutBtn.querySelector("span").textContent = "Check out visitor";
+            });
     }
 
     function pauseScanner() {
@@ -373,6 +496,10 @@
                 }
 
                 pauseScanner();
+                if (data.action === "checkout_ready") {
+                    showCheckoutResult(data);
+                    return;
+                }
                 showSuccessResult(data);
             })
             .catch(function (error) {
@@ -762,6 +889,7 @@
         }
     });
     scanNextBtn.addEventListener("click", prepareNextScan);
+    confirmCheckoutBtn.addEventListener("click", confirmCheckout);
     openOverrideBtn.addEventListener("click", openOverrideDialog);
     document.getElementById("closeQrOverrideBtn").addEventListener("click", closeOverrideDialog);
     document.getElementById("cancelQrOverrideBtn").addEventListener("click", closeOverrideDialog);

@@ -112,6 +112,8 @@ function mobile_appointment_payload(mysqli $conn, array $row, bool $withDetails 
         "rejection_reason" => (string) ($row["rejection_reason"] ?? ""),
         "checked_in_at" => $row["checked_in_at"] ?? null,
         "completed_at" => $row["completed_at"] ?? null,
+        // How a finished visit ended: scan, guard, left_campus, or end_of_day.
+        "checkout_method" => isset($row["checkout_method"]) ? (string) $row["checkout_method"] : null,
         "created_at" => $row["created_at"],
         "qr_pass" => null,
         "visit" => $visitId > 0 ? mobile_visit_summary($conn, $visitId, (int) ($row["stop_number"] ?? 0)) : null,
@@ -125,8 +127,9 @@ function mobile_appointment_payload(mysqli $conn, array $row, bool $withDetails 
             "token" => $row["public_token"],
             "valid_from" => $validFrom->format("Y-m-d H:i:s"),
             "valid_until" => $row["scheduled_end_at"],
-            "currently_valid" => $status === "approved" && new DateTime("now") >= $validFrom
-                && new DateTime("now") <= new DateTime((string) $row["scheduled_end_at"]),
+            // While checked in, the same pass is scanned again at the gate to check out.
+            "currently_valid" => $status === "checked_in" || ($status === "approved" && new DateTime("now") >= $validFrom
+                && new DateTime("now") <= new DateTime((string) $row["scheduled_end_at"])),
         ];
     }
     if ($withDetails) {
@@ -144,11 +147,12 @@ function mobile_appointment_payload(mysqli $conn, array $row, bool $withDetails 
 function mobile_owned_appointment(mysqli $conn, int $appointmentId, int $visitorUserId, bool $forUpdate = false): ?array
 {
     $visitColumns = visit_appointment_columns($conn);
+    $checkoutColumn = presence_schema_ready($conn) ? ", checkout_method" : "";
     $sql =
         "SELECT id, registration_code, public_token, office_code, visitor_full_name, visitor_email,
                 contact_number, device_name, visit_type, purpose, destination, subject, additional_details,
                 scheduled_start_at, scheduled_end_at, visitor_user_id, status, status_updated_at,
-                rejection_reason, checked_in_at, completed_at, created_at{$visitColumns}
+                rejection_reason, checked_in_at, completed_at, created_at{$checkoutColumn}{$visitColumns}
          FROM appointments WHERE id = ? AND visitor_user_id = ? LIMIT 1" . ($forUpdate ? " FOR UPDATE" : "");
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("ii", $appointmentId, $visitorUserId);

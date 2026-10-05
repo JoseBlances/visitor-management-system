@@ -179,7 +179,11 @@
         return { date: date, time: endTime ? startTime + "–" + endTime : startTime };
     }
 
-    function statusMeta(status) {
+    function statusMeta(status, appointment) {
+        // A checked-in visitor whose phone confirmed they reached this office.
+        if (status === "checked_in" && appointment && appointment.arrived_at) {
+            return { label: "Arrived", className: "is-active" };
+        }
         const map = {
             pending_approval: { label: "Pending approval", className: "is-pending" },
             reschedule_proposed: { label: "Waiting for visitor", className: "is-pending" },
@@ -233,12 +237,24 @@
         return cell;
     }
 
-    function appendStatusCell(row, status) {
+    /** "Arrived 2:03 PM, confirmed by GPS (±4 m)" for a visitor at this office. */
+    function arrivalText(appointment) {
+        const how = appointment.arrival_method === "gps"
+            ? "confirmed by GPS" + (appointment.arrival_accuracy_meters != null
+                ? " (±" + Math.round(Number(appointment.arrival_accuracy_meters)) + " m)" : "")
+            : "confirmed by the visitor";
+        return formatDateTime(appointment.arrived_at, false) + ", " + how;
+    }
+
+    function appendStatusCell(row, status, appointment) {
         const cell = document.createElement("td");
-        const meta = statusMeta(status);
+        const meta = statusMeta(status, appointment);
         const badge = document.createElement("span");
         badge.className = "admin-status " + meta.className;
         badge.textContent = meta.label;
+        if (appointment && appointment.arrived_at) {
+            badge.title = "Arrived " + arrivalText(appointment);
+        }
         cell.appendChild(badge);
         row.appendChild(cell);
     }
@@ -283,7 +299,7 @@
         if (kind === "requests") {
             appendTextCell(row, formatDateTime(item.created_at, false), "");
         }
-        appendStatusCell(row, item.status);
+        appendStatusCell(row, item.status, item);
         if (kind === "history") {
             appendTextCell(row, item.processed_by || (item.status === "unanswered" || item.status === "window_closed" ? "System" : "—"), "");
             appendTextCell(row, formatDateTime(item.processed_at || item.status_updated_at, false), "");
@@ -538,7 +554,7 @@
         const appointment = data.appointment;
         setText("officeAppointmentTitle", appointment.visitor_full_name || "Visitor request");
         setText("officeAppointmentCode", appointment.registration_code || "No registration code");
-        const meta = statusMeta(appointment.status);
+        const meta = statusMeta(appointment.status, appointment);
         const status = byId("officeAppointmentStatus");
         status.className = "admin-status " + meta.className;
         status.textContent = meta.label;
@@ -558,6 +574,9 @@
         );
         if (appointment.rejection_reason) {
             details.appendChild(detailPair("Decision reason", appointment.rejection_reason, true));
+        }
+        if (appointment.arrived_at) {
+            details.appendChild(detailPair("Arrived at this office", arrivalText(appointment), true));
         }
         state.selectedVisit = data.visit || null;
         if (data.visit) {

@@ -8,10 +8,10 @@
     "use strict";
 
     const ROLE_HOME = {
-        admin: "admin.html?v=20261003-3",
-        security: "dashboard.html?v=20261003-2",
-        offices: "offices.html?v=20261003-2",
-        visitor: "index.html?v=20261003-2",
+        admin: "admin.html?v=20261004-1",
+        security: "dashboard.html?v=20261004-2",
+        offices: "offices.html?v=20261004-1",
+        visitor: "index.html?v=20261004-1",
     };
     const ROLE_PLACE = {
         admin: "the Admin dashboard",
@@ -659,7 +659,7 @@
                 return;
             }
             const reasons = {
-                idle_timeout: "You were signed out after 30 minutes of inactivity.",
+                idle_timeout: "You were signed out after a period of inactivity.",
                 session_expired: "Your session expired. Please sign in again.",
                 session_revoked: "Your session was ended. Please sign in again.",
             };

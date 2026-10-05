@@ -1082,11 +1082,22 @@
             return;
         }
         if (!routeState.map) {
-            routeState.map = L.map(host, { preferCanvas: true, scrollWheelZoom: false }).setView([10.7177, 122.5559], 17);
-            L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-                maxZoom: 19,
-                attribution: "&copy; OpenStreetMap contributors",
-            }).addTo(routeState.map);
+            const map = L.map(host, CampusMap.mapOptions({ preferCanvas: true, scrollWheelZoom: false })).setView([10.7177, 122.5559], 17);
+            routeState.map = map;
+            CampusMap.addBaseLayer(map);
+            CampusMap.addScale(map);
+            CampusMap.enableLabels(map);
+            // In the page, the mouse wheel scrolls the page; in full view it zooms the map.
+            CampusMap.addExpandControl(map, host.parentElement, {
+                onChange: function (expanded) {
+                    if (expanded) {
+                        map.scrollWheelZoom.enable();
+                    } else {
+                        map.scrollWheelZoom.disable();
+                    }
+                    CampusMap.lockToCampus(map, routeState.campus, false);
+                },
+            });
             routeState.campusLayer = L.layerGroup().addTo(routeState.map);
             routeState.layer = L.layerGroup().addTo(routeState.map);
             applyRouteCampus();
@@ -1121,7 +1132,7 @@
                 bounds.extend(segment.from);
                 bounds.extend(segment.to);
             });
-            routeState.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 19 });
+            routeState.map.fitBounds(bounds, { padding: [30, 30], maxZoom: 20 });
             routeState.fittedKey = key;
         }
     }
@@ -2324,8 +2335,12 @@
         text("securityPolicy", "Policy: sign-in pauses for " + policy.base_minutes + " minutes after " + policy.threshold
             + " wrong attempts on one account from one network, doubling for repeats within 24 hours. An account is locked everywhere after "
             + policy.account_alarm_failures + " failures from " + policy.account_alarm_ips + "+ networks in an hour, and a network is paused after "
-            + policy.ip_failures + " failures across accounts in 10 minutes. Sessions end after " + policy.idle_minutes
-            + " minutes of inactivity. Two-step verification is required for: "
+            + policy.ip_failures + " failures across accounts in 10 minutes. "
+            + (policy.idle_minutes > 0
+                ? "Sessions end after " + policy.idle_minutes + " minutes of inactivity"
+                : "Staff stay signed in until they sign out")
+            + (policy.session_max_hours > 0 ? ", for up to " + policy.session_max_hours + " hours after signing in. " : ". ")
+            + "Two-step verification is required for: "
             + (policy.two_factor_required_roles.length ? policy.two_factor_required_roles.map(roleLabel).join(", ") : "no roles") + ".");
     }
 

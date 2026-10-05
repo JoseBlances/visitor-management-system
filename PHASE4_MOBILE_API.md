@@ -26,10 +26,9 @@ fields, and configurable mobile policies.
 - Send and receive JSON using UTF-8.
 - Authenticated requests use `Authorization: Bearer <access_token>`.
 - Raw access tokens are never stored in the database; only SHA-256 hashes are stored.
-  Password-reset validation uses hashes as well. Until an email provider is wired,
-  the short-lived raw action token is present only in its Git-excluded outbound-email
-  queue payload so the future sender can deliver it; clear that payload after delivery
-  or replace it with provider-side immediate sending before production.
+  Password-reset validation uses hashes as well. The short-lived raw recovery code waits
+  in its `outbound_emails` row only until the email worker sends it or gives up; the
+  worker then deletes it from the row.
 - Access tokens expire after 30 days by default and are revoked by sign-out or password
   reset.
 - Authentication and recovery requests are rate-limited by identity and IP address.
@@ -61,7 +60,9 @@ fields, and configurable mobile policies.
 | POST/DELETE | `/devices.php` | Bearer | Register, rotate, or remove an FCM token |
 | GET/POST | `/consent.php` | Bearer | Inspect, grant, or withdraw GPS consent |
 | GET/POST | `/tracking.php` | Bearer | Inspect/start/stop an appointment session |
-| POST | `/locations.php` | Bearer | Idempotent single/batch GPS uploads |
+| GET | `/campus_map.php?appointment_id=` | Bearer | Campus boundary, gates, destination and stops (with Department Directory locations and recorded arrivals), campus-exit rules, and the arrival rule for the visitor map (`VISITOR_NAVIGATION.md`) |
+| POST | `/arrival.php` | Bearer | Confirmed arrival at an office stop (`method` gps or visitor); notifies the office and Security |
+| POST | `/locations.php` | Bearer | Idempotent single/batch GPS uploads (inside the campus only) |
 
 The machine-readable contract is in `phone_tracker/api/v1/openapi.yaml`.
 
@@ -85,10 +86,14 @@ Security web workflow remains responsible for scanning and recorded exceptions.
    by default), assigns a stable `client_event_id`, and stores unsent points locally.
 6. `locations.php` accepts up to 100 points per batch by default. Re-sending a batch is
    safe: duplicate event IDs are counted but not stored twice.
-7. Completion closes the server tracking session. Points captured before completion
-   may arrive during the 24-hour offline grace period; post-completion captures are
-   rejected.
-8. Raw GPS points use a configurable 90-day default retention. The cleanup worker is a
+7. Positions outside the campus boundary are never stored; the server only notes that
+   the visitor is outside. Three accurate readings outside over five minutes confirm a
+   campus exit: the visit ends and the session closes with `ended_reason = campus_exit`
+   (see `LIVE_MONITORING.md`).
+8. Completion closes the server tracking session. Points captured before completion
+   may arrive during the 24-hour offline grace period; a batch with only later captures
+   gets 409, which tells the app to stop tracking.
+9. Raw GPS points use a configurable 90-day default retention. The cleanup worker is a
    dry run unless explicitly invoked with `--apply`.
 
 These values live in `mobile_api_settings`. Confirm the 90-day retention period with
@@ -110,19 +115,25 @@ Configuration:
 1. Copy `phone_tracker/config/mobile_api.example.php` to `mobile_api.php`.
 2. Add the Firebase project ID.
 3. Place the service-account file outside the public web root when deployed, then set
-   its path through `FIREBASE_SERVICE_ACCOUNT_FILE` or the local config.
+   its path through `FIREBASE_SERVICE_ACCOUNT_FILE` or the local config. A hosted server
+   can instead put the whole JSON (or its base64) in `FIREBASE_SERVICE_ACCOUNT_JSON`; the
+   project ID is then read from it.
 4. Enable the Firebase Cloud Messaging API v1.
-5. Schedule the worker (for example every minute) after a successful real-device test.
+5. `workers/run_scheduled_jobs.php` runs the worker every minute together with the
+   other background jobs (`DEPLOYMENT.md`).
 
 The repository contains no Firebase credential. Without configuration, the worker exits
 safely and queued in-app notifications continue to work.
 
 ## Account recovery email
 
-Password-reset messages are placed in `outbound_emails`. A deployment email provider
-still needs to consume that queue. This keeps account recovery secure:
-production endpoints do not return reset tokens and always use a generic response for
-unknown email addresses.
+Password-reset messages are placed in `outbound_emails`, and
+`workers/send_outbound_emails.php` (`mail_service.php`) sends them through Brevo, Resend,
+or SMTP, as configured by environment variables (`DEPLOYMENT.md`, step 4). Failed sends
+are retried after 1, 2, 4, and 8 minutes; a code that expires first is not sent.
+`php phone_tracker/workers/send_outbound_emails.php --test you@example.com` checks the
+setup. Production endpoints never return reset tokens and always use a generic response
+for unknown email addresses.
 
 ## Kotlin handoff for Phase 5
 
