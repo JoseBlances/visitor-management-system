@@ -7,7 +7,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,7 +21,9 @@ import ph.edu.isatu.visitor.BuildConfig
 import ph.edu.isatu.visitor.VisitorApplication
 import ph.edu.isatu.visitor.data.ApiException
 import ph.edu.isatu.visitor.data.AppointmentDto
+import ph.edu.isatu.visitor.data.ArrivalRequest
 import ph.edu.isatu.visitor.data.AvailabilityData
+import ph.edu.isatu.visitor.data.CampusMapData
 import ph.edu.isatu.visitor.data.CreateAppointmentRequest
 import ph.edu.isatu.visitor.data.LocationConsentRequest
 import ph.edu.isatu.visitor.data.NotificationDto
@@ -53,6 +58,8 @@ data class VisitorUiState(
     val stopAvailability: Map<String, AvailabilityData> = emptyMap(),
     val bookingPrefill: BookingPrefill? = null,
     val tracking: TrackingData? = null,
+    /** The campus map for the visit on screen (boundary, gates, destination). */
+    val campusMap: CampusMapData? = null,
     val error: String? = null,
     val message: String? = null,
 )
@@ -195,12 +202,67 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeAppointment() = _state.update {
-        it.copy(selectedAppointment = null, tracking = if (it.selectedVisit != null) it.tracking else null)
+        val inVisit = it.selectedVisit != null
+        it.copy(
+            selectedAppointment = null,
+            tracking = if (inVisit) it.tracking else null,
+            campusMap = if (inVisit) it.campusMap else null,
+        )
     }
 
     fun openVisit(id: Long) = launchTask { loadVisit(id) }
 
-    fun closeVisit() = _state.update { it.copy(selectedVisit = null, selectedAppointment = null, tracking = null) }
+    fun closeVisit() = _state.update {
+        it.copy(selectedVisit = null, selectedAppointment = null, tracking = null, campusMap = null)
+    }
+
+    /**
+     * Loads the campus map without a spinner. Without a connection, the last copy saved
+     * on the phone for this visit is used, so the map keeps its boundary and pins.
+     */
+    fun loadCampusMap(appointmentId: Long) {
+        viewModelScope.launch {
+            val map = runCatching { repository.campusMap(appointmentId) }.getOrNull()
+                ?: repository.cachedCampusMap(appointmentId)
+                ?: return@launch
+            _state.update { it.copy(campusMap = map) }
+        }
+    }
+
+    private val arrivalReports = mutableMapOf<Long, Job>()
+
+    /**
+     * Reports an arrival at office stop [stopAppointmentId]. Without a connection it tries
+     * again every 30 seconds (for about 10 minutes); a refusal from the server is final.
+     * The campus map is then reloaded so the arrival shows as recorded.
+     */
+    fun reportArrival(campusMapAppointmentId: Long, stopAppointmentId: Long, method: String, distanceMeters: Double?, accuracyMeters: Double?) {
+        if (arrivalReports[stopAppointmentId]?.isActive == true) return
+        arrivalReports[stopAppointmentId] = viewModelScope.launch {
+            val request = ArrivalRequest(stopAppointmentId, method, distanceMeters, accuracyMeters)
+            repeat(ARRIVAL_REPORT_ATTEMPTS) {
+                try {
+                    repository.reportArrival(request)
+                    loadCampusMap(campusMapAppointmentId)
+                    return@launch
+                } catch (error: ApiException) {
+                    if (error.statusCode in 400..499) return@launch
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // No connection: keep the arrival and try again.
+                }
+                delay(ARRIVAL_RETRY_MILLIS)
+            }
+        }
+    }
+
+    /** Gives location consent again; [onConsentGranted] then restarts sharing on the phone. */
+    fun resumeSharing(appointmentId: Long, onConsentGranted: () -> Unit) = launchTask(showBusy = false) {
+        repository.grantConsent(appointmentId)
+        onConsentGranted()
+        _state.update { it.copy(message = "Location sharing is on again.") }
+    }
 
     fun pollSelectedVisit(id: Long) {
         viewModelScope.launch {
@@ -409,6 +471,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             ?: apiError?.message
             ?: error.message
             ?: "Something went wrong. Check your connection and try again."
+    }
+
+    private companion object {
+        const val ARRIVAL_REPORT_ATTEMPTS = 20
+        const val ARRIVAL_RETRY_MILLIS = 30_000L
     }
 
     class Factory(private val application: Application) : ViewModelProvider.Factory {

@@ -33,7 +33,6 @@ function security_visit_row(mysqli $conn, int $visitId): ?array
     return [
         "id" => !empty($visit["tracking_appointment_id"]) ? (int) $visit["tracking_appointment_id"] : (int) $first["id"],
         "visit_id" => $visitId,
-        "public_token" => $visit["public_token"],
         "visitor_full_name" => $first["visitor_full_name"],
         "visitor_email" => $first["visitor_email"],
         "registration_code" => $visit["visit_code"],
@@ -47,6 +46,7 @@ function security_visit_row(mysqli $conn, int $visitId): ?array
         "status" => $displayStatus,
         "checked_in_at" => $visit["checked_in_at"],
         "completed_at" => $visit["completed_at"],
+        "checkout_method" => $visit["checkout_method"] ?? null,
         "cancelled_at" => $status === "closed" ? $visit["closed_at"] : null,
         "created_at" => $visit["created_at"],
         "visit_type" => "multi_stop",
@@ -130,11 +130,13 @@ if ($summaryResult) {
 $rows = [];
 $officeMap = appointment_office_map();
 $visitColumns = visit_appointment_columns($conn, "a");
+// The QR pass codes stay out of this list: Security reads them from the visitor's pass.
+$checkoutSelect = presence_schema_ready($conn) ? "a.checkout_method" : "NULL AS checkout_method";
 $result = $conn->query(
-    "SELECT a.id, a.public_token, a.visitor_full_name, a.visitor_email,
+    "SELECT a.id, a.visitor_full_name, a.visitor_email,
             a.registration_code, a.office_code, a.device_name, a.appointment_at,
             a.scheduled_start_at, a.scheduled_end_at, a.status,
-            a.checked_in_at, a.completed_at, a.cancelled_at, a.created_at,
+            a.checked_in_at, a.completed_at, a.cancelled_at, a.created_at, {$checkoutSelect},
             {$visitTypeSelect}, {$purposeSelect}, {$subjectSelect}{$visitColumns}
      FROM appointments a
      ORDER BY COALESCE(a.status_updated_at, a.created_at) DESC, a.id DESC

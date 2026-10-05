@@ -66,8 +66,9 @@ a disposable MariaDB database. The real local `phone_tracker` data was not chang
 - `phone_tracker/scan_appointment.php`
 - `phone_tracker/create_qr_override.php`
 - `phone_tracker/security_live_locations.php`
-- `phone_tracker/security_route_dates.php`
-- `phone_tracker/security_route_points.php`
+- `phone_tracker/security_visitor_trail.php` (replaced `security_route_dates.php` and
+  `security_route_points.php`; see `LIVE_MONITORING.md`)
+- `phone_tracker/scan_checkout.php`
 - `phone_tracker/dashboard.html`
 - `phone_tracker/dashboard.js`
 - `phone_tracker/save_location.php`

@@ -3,6 +3,7 @@ header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/visit_service.php";
+require_once __DIR__ . "/arrival_service.php";
 
 require_permission_json("office.appointments");
 $appointmentId = isset($_GET["id"]) ? (int) $_GET["id"] : 0;
@@ -13,13 +14,14 @@ if ($appointmentId <= 0 || $officeCode === "") {
 }
 
 $visitColumns = visit_appointment_columns($conn, "a");
+$arrivalColumns = arrival_schema_ready($conn) ? ", a.arrived_at, a.arrival_method, a.arrival_accuracy_meters" : "";
 $stmt = $conn->prepare(
     "SELECT a.id, a.registration_code, a.visitor_full_name, a.visitor_email,
             a.contact_number, a.visit_type, a.purpose, a.destination, a.subject,
             a.additional_details, a.scheduled_start_at, a.scheduled_end_at,
             a.status, a.rejection_reason, a.created_at, a.status_updated_at,
             a.approved_at, a.rejected_at, a.checked_in_at, a.completed_at,
-            COALESCE(NULLIF(processor.display_name, ''), processor.username, '') AS processed_by{$visitColumns}
+            COALESCE(NULLIF(processor.display_name, ''), processor.username, '') AS processed_by{$visitColumns}{$arrivalColumns}
      FROM appointments a
      LEFT JOIN app_users processor ON processor.id = COALESCE(
          a.approved_by_user_id, a.rejected_by_user_id, a.completed_by_user_id, a.cancelled_by_user_id

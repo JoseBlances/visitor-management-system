@@ -4,13 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ISATU Security Dashboard</title>
-    <link rel="stylesheet" href="style.css?v=20261003-3">
+    <link rel="stylesheet" href="style.css?v=20261005-2">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css">
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body class="admin-page security-page">
     <header class="admin-topbar">
-        <a class="admin-brand" href="dashboard.html?v=20260917-3" aria-label="ISATU Security Dashboard home">
+        <a class="admin-brand" href="dashboard.html?v=20261004-2" aria-label="ISATU Security Dashboard home">
             <span class="admin-brand-mark" aria-hidden="true">
                 <img src="assets/images/isatu-logo.png" alt="">
             </span>
@@ -30,7 +31,7 @@
             </button>
             <div class="admin-profile-menu" id="securityProfileMenu" hidden>
                 <p>Signed in as <strong id="securityProfileUsername">security</strong></p>
-                <a class="security-admin-link" id="securityAdminLink" href="admin.html?v=20260917-2" hidden>Open Admin Dashboard</a>
+                <a class="security-admin-link" id="securityAdminLink" href="admin.html?v=20261004-1" hidden>Open Admin Dashboard</a>
                 <button type="button" id="logoutBtn">Sign out</button>
             </div>
         </div>
@@ -76,7 +77,7 @@
                             <strong id="checkedOutTodayCount">0</strong>
                         </button>
                     </div>
-                    <a class="security-scan-card" href="security_scan.html?v=20260922-2">
+                    <a class="security-scan-card" href="security_scan.html?v=20261004-2">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M8 8h3v3H8zM13 8h3v3h-3zM8 13h3v3H8zM14 14h2v2h-2z"/></svg>
                         <span>Scan QR</span>
                     </a>
@@ -143,42 +144,84 @@
             </section>
 
             <section class="admin-view security-view security-monitoring-view" id="securityMonitoringView" data-security-panel="monitoring" hidden>
-                <div class="security-map-shell">
+                <div class="security-map-shell" id="monitorShell">
                     <div id="securityMap" aria-label="Live visitor monitoring map"></div>
 
-                    <section class="security-map-controls" aria-label="Map filters">
-                        <div class="security-map-control-header">
+                    <aside class="monitor-panel" id="monitorPanel" aria-label="Visitor monitoring">
+                        <button class="monitor-sheet-toggle" id="monitorSheetToggle" type="button" aria-expanded="true" aria-controls="monitorPanelBody">
+                            <span aria-hidden="true"></span>
+                            <span class="sr-only">Show or hide the visitor panel</span>
+                        </button>
+                        <header class="monitor-panel-header">
                             <div>
                                 <p class="admin-eyebrow">Live map</p>
                                 <h2>Visitor Monitoring</h2>
                             </div>
-                            <span class="security-live-indicator"><i></i> Live</span>
-                        </div>
-                        <label for="monitorVisitorSelect">
-                            <span>Visitor route</span>
-                            <select id="monitorVisitorSelect">
-                                <option value="">Select a visitor</option>
-                            </select>
-                        </label>
-                        <label for="monitorDateSelect">
-                            <span>Route date</span>
-                            <select id="monitorDateSelect" disabled>
-                                <option value="">Select a visitor first</option>
-                            </select>
-                        </label>
-                        <button class="admin-primary-button" id="showRouteBtn" type="button" disabled>Show route history</button>
-                        <div class="security-location-legend" aria-label="Location status legend">
-                            <span><i class="is-live"></i>Live</span>
-                            <span><i class="is-stale"></i>Stale</span>
-                            <span><i class="is-offline"></i>Offline</span>
-                        </div>
-                        <p class="security-map-help">Locations update from checked-in visitors who have granted GPS access.</p>
-                    </section>
+                            <span class="security-live-indicator" id="monitorLiveIndicator"><i></i><span>Live</span></span>
+                        </header>
 
-                    <section class="security-map-status" id="securityMapStatus" aria-live="polite">
-                        <strong id="mapStatusTitle">Waiting for active visitors</strong>
-                        <span id="mapStatusText">Checked-in visitors will appear here automatically.</span>
-                    </section>
+                        <div class="monitor-panel-body" id="monitorPanelBody">
+                            <div class="monitor-summary" id="monitorSummary" aria-live="polite"></div>
+
+                            <div id="monitorListView">
+                                <div class="monitor-tabs" role="tablist" aria-label="Visitors">
+                                    <button class="is-active" type="button" role="tab" id="monitorTabActive" aria-selected="true" data-monitor-tab="active">
+                                        On campus <span id="monitorActiveCount">0</span>
+                                    </button>
+                                    <button type="button" role="tab" id="monitorTabFinished" aria-selected="false" data-monitor-tab="finished" tabindex="-1">
+                                        Left today <span id="monitorFinishedCount">0</span>
+                                    </button>
+                                </div>
+                                <label class="monitor-search" for="monitorSearch">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                                    <span class="sr-only">Search visitors</span>
+                                    <input id="monitorSearch" type="search" placeholder="Search name, office, or ID" autocomplete="off">
+                                </label>
+                                <ul class="monitor-list" id="monitorList" aria-label="Visitors"></ul>
+                                <p class="monitor-empty" id="monitorEmpty" hidden></p>
+                            </div>
+
+                            <div class="monitor-detail" id="monitorDetail" hidden>
+                                <button class="monitor-back" id="monitorBackBtn" type="button">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+                                    All visitors
+                                </button>
+                                <div class="monitor-detail-head">
+                                    <span class="monitor-detail-icon" id="monitorDetailIcon" aria-hidden="true"></span>
+                                    <div>
+                                        <h3 id="monitorDetailName">Visitor</h3>
+                                        <p id="monitorDetailMeta"></p>
+                                    </div>
+                                </div>
+                                <div class="monitor-chips" id="monitorDetailChips"></div>
+                                <dl class="monitor-facts" id="monitorDetailFacts"></dl>
+                                <ol class="monitor-stops" id="monitorDetailStops" aria-label="Office stops" hidden></ol>
+                                <p class="monitor-trail-note" id="monitorTrailNote"></p>
+                                <div class="monitor-actions">
+                                    <button class="monitor-action" id="monitorFollowBtn" type="button" aria-pressed="false">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+                                        <span>Follow</span>
+                                    </button>
+                                    <button class="monitor-action" id="monitorCenterBtn" type="button">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"/><circle cx="12" cy="12" r="2.5"/></svg>
+                                        <span>Show on map</span>
+                                    </button>
+                                    <button class="monitor-action is-danger" id="monitorEndBtn" type="button">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+                                        <span>End visit</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="security-location-legend" aria-label="Map legend">
+                                <span><i class="is-live"></i>Live</span>
+                                <span><i class="is-stale"></i>Stale</span>
+                                <span><i class="is-offline"></i>Offline</span>
+                                <span><i class="is-trail"></i>Walked path</span>
+                            </div>
+                            <p class="security-map-help" id="monitorPrivacyNote">Only positions inside the campus boundary are shown. A visitor who steps outside disappears from the map, and their visit ends after 5 minutes outside.</p>
+                        </div>
+                    </aside>
 
                     <div class="security-map-error" id="securityMapError" role="alert" hidden></div>
                 </div>
@@ -186,10 +229,13 @@
         </main>
     </div>
 
-    <script src="auth.js?v=20261003-1"></script>
+    <script src="auth.js?v=20261004-1"></script>
     <script src="auth_ui.js?v=20261003-1"></script>
-    <script src="account_security.js?v=20261003-1"></script>
-    <script src="campus_map.js?v=20260928-1"></script>
-    <script src="dashboard.js?v=20260928-1"></script>
+    <script src="account_security.js?v=20261004-1"></script>
+    <!-- Sharp map at every zoom (campus_map.js falls back to OpenStreetMap images without it). -->
+    <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
+    <script src="campus_map.js?v=20261005-2"></script>
+    <script src="dashboard.js?v=20261005-1"></script>
 </body>
 </html>

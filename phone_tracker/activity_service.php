@@ -10,7 +10,10 @@ require_once __DIR__ . "/auth_security.php";
 
 const ACTIVITY_SIGNIN_ACTIONS = ["auth.signed_in", "auth.signed_out", "mobile.signed_in", "mobile.signed_out"];
 const ACTIVITY_DECISION_ACTIONS = ["appointment.approved", "appointment.rejected", "appointment.reschedule_proposed", "appointment.stop_completed"];
-const ACTIVITY_GATE_ACTIONS = ["appointment.checked_in", "appointment.completed", "appointment.qr_override_created", "visit.checked_in", "visit.completed"];
+const ACTIVITY_GATE_ACTIONS = [
+    "appointment.checked_in", "appointment.completed", "appointment.qr_override_created", "visit.checked_in", "visit.completed",
+    "presence.left_campus", "presence.returned_to_campus", "visit.arrived",
+];
 const ACTIVITY_SCHEDULE_ACTIONS = ["office.availability_updated", "office.availability_exception_added", "office.availability_exception_removed"];
 const ACTIVITY_VISITOR_ACTIONS = ["appointment.created", "appointment.cancelled", "appointment.reschedule_response"];
 const ACTIVITY_CATEGORIES = ["all", "signins", "decisions", "gate", "schedules", "accounts", "visitors", "system"];
@@ -104,6 +107,31 @@ function activity_status(string $status): string
 /**
  * @return array{title: string, text: string, tone: string}
  */
+/** Title, text, and tone for a visit that ended, by how it ended (presence_service.php). */
+function activity_visit_ended(string $method, string $visitorName, string $possessive, string $noun, array $details): array
+{
+    switch ($method) {
+        case "scan":
+            return ["Checked out a visitor", "Checked " . $visitorName . " out at the gate", "good"];
+        case "left_campus":
+            $at = activity_when($details["completed_at"] ?? null);
+            return [
+                "Visit ended automatically",
+                ucfirst($visitorName) . " left the campus without checking out" . ($at !== "" ? " at " . $at : "")
+                    . ", so the " . $noun . " ended and location tracking stopped",
+                "warn",
+            ];
+        case "end_of_day":
+            return [
+                "Visit ended automatically",
+                ucfirst($possessive) . " " . $noun . " was still open at the end of the day, so it ended automatically",
+                "warn",
+            ];
+        default:
+            return ["Ended a visit", "Ended " . $possessive . " " . $noun . " and stopped location tracking", "muted"];
+    }
+}
+
 function activity_describe(array $row): array
 {
     $action = (string) $row["action"];
@@ -162,14 +190,35 @@ function activity_describe(array $row): array
         case "appointment.checked_in":
             return ["Checked in a visitor", "Checked in " . $visitorName . " at the gate" . ($office !== "" ? " for " . $office : ""), "good"];
         case "appointment.completed":
-            return ["Ended a visit", "Ended " . $possessive . " visit and stopped location tracking", "muted"];
+            return activity_visit_ended((string) ($details["method"] ?? ""), $visitorName, $possessive, "visit", $details);
         case "appointment.qr_override_created":
             $until = activity_when($details["valid_until"] ?? null);
             return ["Allowed a pass outside its time", "Let " . $possessive . " QR pass work" . ($until !== "" ? " until " . $until : "") . $because, "warn"];
         case "visit.checked_in":
             return ["Checked in a multi-office visit", "Checked in " . $visitorName . " for a visit to several offices", "good"];
         case "visit.completed":
-            return ["Ended a multi-office visit", "Ended " . $possessive . " visit to several offices", "muted"];
+            if (empty($details["method"])) {
+                return ["Ended a multi-office visit", "Ended " . $possessive . " visit to several offices", "muted"];
+            }
+            return activity_visit_ended((string) $details["method"], $visitorName, $possessive, "visit to several offices", $details);
+        case "presence.left_campus":
+            $at = activity_when($details["at"] ?? null);
+            return [
+                "Went outside the campus",
+                ucfirst($visitorName) . " went outside the campus boundary" . ($at !== "" ? " at " . $at : "")
+                    . ". Their position is hidden while outside",
+                "warn",
+            ];
+        case "presence.returned_to_campus":
+            $at = activity_when($details["at"] ?? null);
+            return ["Came back inside the campus", ucfirst($visitorName) . " came back inside the campus boundary" . ($at !== "" ? " at " . $at : ""), "info"];
+        case "visit.arrived":
+            $arrivedAt = $detailOffice !== "" ? $detailOffice : ($office !== "" ? $office : "their office");
+            $accuracy = $details["accuracy_meters"] ?? null;
+            $how = ($details["method"] ?? "") === "gps"
+                ? "confirmed by GPS" . ($accuracy !== null ? " (±" . (int) round((float) $accuracy) . " m)" : "")
+                : "confirmed by the visitor";
+            return ["Arrived at an office", ucfirst($visitorName) . " arrived at " . $arrivedAt . ", " . $how, "good"];
 
         case "office.availability_updated":
             $open = !empty($details["accepting_visitors"]);

@@ -155,6 +155,8 @@ data class AppointmentDto(
     val rejectionReason: String = "",
     val checkedInAt: String? = null,
     val completedAt: String? = null,
+    /** How a finished visit ended: "scan", "guard", "left_campus", or "end_of_day". */
+    val checkoutMethod: String? = null,
     val createdAt: String = "",
     val qrPass: QrPassDto? = null,
     val visit: VisitSummaryDto? = null,
@@ -174,6 +176,8 @@ data class VisitDto(
     val status: String = "open",
     val checkedInAt: String? = null,
     val completedAt: String? = null,
+    /** How a finished visit ended: "scan", "guard", "left_campus", or "end_of_day". */
+    val checkoutMethod: String? = null,
     val trackingAppointmentId: Long? = null,
     val currentStopId: Long? = null,
     val qrPass: QrPassDto? = null,
@@ -334,4 +338,72 @@ data class LocationBatchData(
     val accepted: Int = 0,
     val duplicates: Int = 0,
     val serverTime: String = "",
+)
+
+data class CampusPointDto(val latitude: Double = 0.0, val longitude: Double = 0.0)
+
+data class CampusGateDto(val name: String = "", val latitude: Double = 0.0, val longitude: Double = 0.0)
+
+/** One office stop on the campus map. Coordinates are null until an admin places the pin. */
+data class CampusStopDto(
+    val appointmentId: Long = 0,
+    val officeCode: String = "",
+    val label: String = "",
+    /** Where the office is, from the Department Directory, e.g. "CCI building, room 201". */
+    val location: String = "",
+    val description: String = "",
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val status: String = "",
+    val visitType: String = "appointment",
+    val scheduledStartAt: String? = null,
+    val scheduledEndAt: String? = null,
+    /** Set once the visitor's arrival at this office was confirmed (arrival.php). */
+    val arrivedAt: String? = null,
+    /** "gps" or "visitor". */
+    val arrivalMethod: String? = null,
+)
+
+/** The server's rules for confirming that a visitor left the campus. */
+data class ExitPolicyDto(
+    val minimumAccuracyMeters: Double = 50.0,
+    val outsideConfirmationPoints: Int = 3,
+    val outsideConfirmationSeconds: Int = 300,
+    val boundaryBufferMeters: Double = 25.0,
+)
+
+/**
+ * GET campus_map.php: the boundary, gates, and where the visitor is going. [destination]
+ * is null once every office stop is done, when the visitor should head back to a gate.
+ */
+data class CampusMapData(
+    val appointmentId: Long = 0,
+    val campusConfigured: Boolean = false,
+    val campusUpdatedAt: String? = null,
+    val campusBoundary: List<CampusPointDto> = emptyList(),
+    val gates: List<CampusGateDto> = emptyList(),
+    val destination: CampusStopDto? = null,
+    val stops: List<CampusStopDto> = emptyList(),
+    val exitPolicy: ExitPolicyDto = ExitPolicyDto(),
+    /** GPS must place the visitor this close to the office pin to count as arrived. */
+    val arrivalDistanceMeters: Double = 3.0,
+    /** ...from a reading at least this accurate. */
+    val arrivalMaxAccuracyMeters: Double = 8.0,
+    val serverTime: String? = null,
+)
+
+/** POST arrival.php: the visitor reached an office stop. */
+data class ArrivalRequest(
+    val appointmentId: Long,
+    /** "gps" or "visitor". */
+    val method: String,
+    val distanceMeters: Double?,
+    val accuracyMeters: Double?,
+)
+
+data class ArrivalData(
+    val appointmentId: Long = 0,
+    val arrivedAt: String? = null,
+    val arrivalMethod: String? = null,
+    val alreadyRecorded: Boolean = false,
 )

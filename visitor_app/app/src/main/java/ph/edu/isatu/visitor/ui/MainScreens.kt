@@ -124,11 +124,11 @@ fun MainShell(state: VisitorUiState, viewModel: AppViewModel) {
         }
     }
     state.selectedAppointment?.let { appointment ->
-        AppointmentDetailScreen(appointment, state.tracking, state.busy, viewModel)
+        AppointmentDetailScreen(appointment, state.tracking, state.busy, viewModel, state.campusMap, state.error ?: state.message)
         return
     }
     state.selectedVisit?.let { visit ->
-        VisitDetailScreen(visit, state.tracking, state.busy, viewModel)
+        VisitDetailScreen(visit, state.tracking, state.busy, viewModel, state.campusMap, state.error ?: state.message)
         return
     }
 

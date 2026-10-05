@@ -345,9 +345,61 @@ paths:
       responses:
         "200": { $ref: "#/components/responses/Success" }
         "409": { $ref: "#/components/responses/Error" }
+  /campus_map.php:
+    get:
+      summary: Campus map and walking guidance for one of the visitor's appointments
+      description: >-
+        Returns campus_configured, campus_updated_at, campus_boundary (latitude/longitude points), gates
+        (name, latitude, longitude), destination and stops, exit_policy (minimum_accuracy_meters,
+        outside_confirmation_points, outside_confirmation_seconds, boundary_buffer_meters),
+        arrival_distance_meters and arrival_max_accuracy_meters (GPS must place the visitor within that
+        distance of the office pin, from readings at least that accurate, to confirm an arrival;
+        arrival_radius_meters repeats the distance for older app versions), and server_time.
+        Each stop has appointment_id, office_code, label, location and description (from the Department
+        Directory), latitude and longitude (null until an administrator places the pin), status,
+        visit_type, scheduled_start_at, scheduled_end_at, and arrived_at and arrival_method once the
+        arrival is recorded. destination is the first stop still to visit, and null once every stop is
+        done, when the app guides the visitor to a gate.
+      parameters:
+        - in: query
+          name: appointment_id
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+  /arrival.php:
+    post:
+      summary: Record a confirmed arrival at one of the visitor's office stops
+      description: >-
+        method gps requires distance_meters within the arrival distance and accuracy_meters within
+        arrival_max_accuracy_meters (campus_map.php); method visitor is the visitor tapping "I'm here".
+        Only the first arrival per stop is kept (a repeat returns already_recorded true). The office's
+        staff are notified and the activity log records it. 409 when the stop is not checked in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [appointment_id, method]
+              properties:
+                appointment_id: { type: integer, minimum: 1, description: The office stop (for a multi-office visit, the stop's own appointment) }
+                method: { type: string, enum: [gps, visitor] }
+                distance_meters: { type: number, minimum: 0, nullable: true }
+                accuracy_meters: { type: number, minimum: 0, nullable: true }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /locations.php:
     post:
       summary: Upload an idempotent GPS batch
+      description: >-
+        Positions outside the campus boundary are never stored; data.outside_campus counts them. After
+        enough accurate readings outside (see campus_map.php exit_policy) the visit ends and data.visit_ended
+        is true. Once a visit has ended, a batch with only later readings returns 409 so the app stops tracking.
       requestBody:
         required: true
         content:
@@ -508,6 +560,11 @@ components:
         status: { $ref: "#/components/schemas/VisitStatus" }
         checked_in_at: { type: string, nullable: true }
         completed_at: { type: string, nullable: true }
+        checkout_method:
+          type: string
+          nullable: true
+          enum: [scan, guard, left_campus, end_of_day]
+          description: How a finished visit ended. Appointments (appointment.php) carry the same field.
         tracking_appointment_id: { type: integer, nullable: true, description: Use this appointment id with tracking.php and consent.php once checked in }
         current_stop_id: { type: integer, nullable: true, description: The stop the visitor should head to now }
         qr_pass:

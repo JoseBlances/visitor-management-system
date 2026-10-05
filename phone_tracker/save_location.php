@@ -3,6 +3,7 @@ header("Content-Type: application/json; charset=utf-8");
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_maintenance.php";
+require_once __DIR__ . "/presence_service.php";
 
 require_permission_json("tracking.self");
 refresh_appointment_time_states($conn);
@@ -100,34 +101,51 @@ if (!$hasConsent) {
     exit;
 }
 
-$stmt = $conn->prepare(
-    "INSERT INTO locations (appointment_id, visitor_user_id, device_name, latitude, longitude, accuracy)
-     VALUES (?, ?, ?, ?, ?, ?)"
-);
-if (!$stmt) {
-    echo json_encode([
-        "success" => false,
-        "message" => "Server error"
-    ]);
-    exit;
-}
-
 $latValue = (float) $latitude;
 $lngValue = (float) $longitude;
 $accuracyValue = is_numeric($accuracy) ? (float) $accuracy : null;
-$stmt->bind_param("iisddd", $appointmentId, $visitorUserId, $device_name, $latValue, $lngValue, $accuracyValue);
+$capturedAt = date("Y-m-d H:i:s");
 
-if ($stmt->execute()) {
-    echo json_encode([
-        "success" => true,
-        "message" => "Location saved"
+// Privacy: a position outside the campus boundary is never stored (presence_service.php).
+$inside = presence_is_inside(presence_campus($conn), $latValue, $lngValue);
+$conn->begin_transaction();
+try {
+    if ($inside) {
+        $stmt = $conn->prepare(
+            "INSERT INTO locations (appointment_id, visitor_user_id, device_name, latitude, longitude, accuracy)
+             VALUES (?, ?, ?, ?, ?, ?)"
+        );
+        $stmt->bind_param("iisddd", $appointmentId, $visitorUserId, $device_name, $latValue, $lngValue, $accuracyValue);
+        $stmt->execute();
+        $stmt->close();
+    }
+    $presence = presence_record($conn, $appointmentId, [
+        ["captured_at" => $capturedAt, "inside" => $inside, "accuracy" => $accuracyValue],
     ]);
-} else {
+    $conn->commit();
+} catch (Throwable $error) {
+    $conn->rollback();
+    $conn->close();
     echo json_encode([
         "success" => false,
         "message" => "Failed to save location"
     ]);
+    exit;
 }
 
-$stmt->close();
+$visitEnded = false;
+if (presence_exit_confirmed($presence)) {
+    try {
+        $visitEnded = (bool) gate_checkout($conn, $appointmentId, null, "left_campus", (string) $presence["outside_since"]);
+    } catch (Throwable $error) {
+        error_log("Campus-exit check-out failed for appointment {$appointmentId}: " . $error->getMessage());
+    }
+}
 $conn->close();
+
+echo json_encode([
+    "success" => true,
+    "message" => $inside ? "Location saved" : "You are outside the campus, so your position is not shared.",
+    "outside_campus" => !$inside,
+    "visit_ended" => $visitEnded,
+]);

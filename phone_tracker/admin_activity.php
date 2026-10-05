@@ -10,6 +10,7 @@
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/activity_service.php";
+require_once __DIR__ . "/presence_service.php";
 
 auth_json_exception_guard();
 auth_require_method("GET");
@@ -344,16 +345,24 @@ if ($view === "appointment") {
         $people .= ", {$alias}.username AS {$alias}_username, {$alias}.first_name AS {$alias}_first_name, {$alias}.last_name AS {$alias}_last_name,
                    {$alias}.display_name AS {$alias}_display_name, {$alias}.role AS {$alias}_role, {$alias}.office_code AS {$alias}_office_code";
     }
+    // How the visit ended (live_monitoring_migration.sql); a multi-office visit keeps it on the visit.
+    $checkoutSelect = ", NULL AS checkout_method";
+    $checkoutJoin = "";
+    if (presence_schema_ready($conn)) {
+        $checkoutSelect = visit_schema_ready($conn) ? ", COALESCE(a.checkout_method, v.checkout_method) AS checkout_method" : ", a.checkout_method";
+        $checkoutJoin = visit_schema_ready($conn) ? "LEFT JOIN visits v ON v.id = a.visit_id" : "";
+    }
     $stmt = $conn->prepare(
         "SELECT a.id, a.visitor_full_name, a.visitor_email, a.contact_number, a.office_code, a.visit_type, a.purpose, a.subject,
                 a.scheduled_start_at, a.scheduled_end_at, a.appointment_at, a.status, a.created_at, a.rejection_reason,
-                a.approved_at, a.rejected_at, a.checked_in_at, a.completed_at, a.cancelled_at {$people}
+                a.approved_at, a.rejected_at, a.checked_in_at, a.completed_at, a.cancelled_at {$checkoutSelect} {$people}
          FROM appointments a
          LEFT JOIN app_users ap ON ap.id = a.approved_by_user_id
          LEFT JOIN app_users rj ON rj.id = a.rejected_by_user_id
          LEFT JOIN app_users ci ON ci.id = a.checked_in_by_user_id
          LEFT JOIN app_users co ON co.id = a.completed_by_user_id
          LEFT JOIN app_users ca ON ca.id = a.cancelled_by_user_id
+         {$checkoutJoin}
          WHERE a.id = ? LIMIT 1"
     );
     $stmt->bind_param("i", $appointmentId);
@@ -364,7 +373,13 @@ if ($view === "appointment") {
         auth_json_error(404, "not_found", "Appointment not found.");
     }
     $handled = [];
-    foreach (["approved" => ["ap", "Approved by"], "rejected" => ["rj", "Declined by"], "checked_in" => ["ci", "Checked in by"], "completed" => ["co", "Visit ended by"], "cancelled" => ["ca", "Cancelled by"]] as $field => [$alias, $label]) {
+    $endedLabel = [
+        "scan" => "Checked out by",
+        "guard" => "Visit ended by",
+        "left_campus" => "Left campus without checking out",
+        "end_of_day" => "Ended at the end of the day",
+    ][(string) ($appointment["checkout_method"] ?? "")] ?? "Visit ended by";
+    foreach (["approved" => ["ap", "Approved by"], "rejected" => ["rj", "Declined by"], "checked_in" => ["ci", "Checked in by"], "completed" => ["co", $endedLabel], "cancelled" => ["ca", "Cancelled by"]] as $field => [$alias, $label]) {
         $person = activity_person_row($appointment, $alias . "_");
         if ($person || $appointment[$field . "_at"]) {
             $handled[] = ["label" => $label, "person" => $person, "at" => $appointment[$field . "_at"]];

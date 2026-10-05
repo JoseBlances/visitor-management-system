@@ -64,6 +64,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.delay
 import ph.edu.isatu.visitor.data.AppointmentDto
+import ph.edu.isatu.visitor.data.CampusMapData
 import ph.edu.isatu.visitor.data.TrackingData
 import ph.edu.isatu.visitor.service.VisitorTrackingService
 
@@ -73,6 +74,8 @@ fun AppointmentDetailScreen(
     tracking: TrackingData?,
     busy: Boolean,
     viewModel: AppViewModel,
+    campusMap: CampusMapData? = null,
+    notice: String? = null,
 ) {
     BackHandler(onBack = viewModel::closeAppointment)
     val context = LocalContext.current
@@ -83,12 +86,11 @@ fun AppointmentDetailScreen(
     var selectedSlotId by remember(pendingProposal?.id) {
         mutableLongStateOf(pendingProposal?.slots?.singleOrNull()?.id ?: 0L)
     }
-    var trackingRequested by remember(appointment.id) { mutableStateOf(false) }
     var locationPermissionMissing by remember(appointment.id) { mutableStateOf(false) }
+    var resumingShare by remember(appointment.id) { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
         if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
             VisitorTrackingService.start(context, appointment.id)
-            trackingRequested = true
             locationPermissionMissing = false
         } else {
             locationPermissionMissing = true
@@ -118,7 +120,6 @@ fun AppointmentDetailScreen(
             ) == PackageManager.PERMISSION_GRANTED
             if (preciseLocationGranted) {
                 VisitorTrackingService.start(context, appointment.id)
-                trackingRequested = true
                 delay(1_500)
                 viewModel.refreshTrackingSilently(appointment.id)
             } else {
@@ -137,21 +138,53 @@ fun AppointmentDetailScreen(
         }
     }
 
+    // The campus map: on opening, then every minute (an admin may move a pin).
+    LaunchedEffect(appointment.id, appointment.status == "checked_in") {
+        if (appointment.status != "checked_in") return@LaunchedEffect
+        while (true) {
+            viewModel.loadCampusMap(appointment.id)
+            delay(60_000)
+        }
+    }
+    LaunchedEffect(resumingShare) {
+        if (resumingShare) {
+            delay(2_000)
+            viewModel.refreshTrackingSilently(appointment.id)
+            delay(28_000)
+            resumingShare = false
+        }
+    }
+
     if (appointment.status == "checked_in") {
         TrackingMapScreen(
-            destination = appointment.office.name,
-            tracking = tracking,
-            trackingStarting = trackingRequested,
-            locationPermissionMissing = locationPermissionMissing,
+            visit = CampusVisit(
+                trackingAppointmentId = appointment.id,
+                visitorName = appointment.visitor?.fullName.orEmpty().ifBlank { "Registered visitor" },
+                reference = appointment.registrationCode,
+                passPayload = appointment.qrPass?.let { pass -> pass.token.ifBlank { pass.payload } },
+                checkedInAt = appointment.checkedInAt,
+                appointment = appointment,
+            ),
+            campusMap = campusMap?.takeIf { it.appointmentId == appointment.id },
+            sharing = sharingState(locationPermissionMissing, tracking, resumingShare),
+            notice = notice,
+            onDismissNotice = viewModel::clearBanner,
             onBack = viewModel::closeAppointment,
             onRequestLocationPermission = requestTrackingPermissions,
-            onRefresh = {
-                viewModel.pollSelectedAppointment(appointment.id)
-                viewModel.refreshTrackingSilently(appointment.id)
-            },
-            onWithdrawConsent = {
+            onRefreshCampusMap = { viewModel.loadCampusMap(appointment.id) },
+            onStopSharing = {
+                resumingShare = false
                 VisitorTrackingService.stop(context, appointment.id)
                 viewModel.withdrawConsent(appointment.id)
+            },
+            onShareAgain = {
+                viewModel.resumeSharing(appointment.id) {
+                    VisitorTrackingService.start(context, appointment.id)
+                    resumingShare = true
+                }
+            },
+            onArrival = { stopId, method, distance, accuracy ->
+                viewModel.reportArrival(appointment.id, stopId, method, distance, accuracy)
             },
         )
         return
@@ -178,6 +211,11 @@ fun AppointmentDetailScreen(
                 }
             }
             item { StatusPill(appointment.status) }
+            if (appointment.status == "completed" && appointment.checkedInAt != null && appointment.visit == null) {
+                item {
+                    VisitSummaryCard(appointment.checkedInAt, appointment.completedAt, appointment.checkoutMethod)
+                }
+            }
             appointment.visit?.let { visit ->
                 item {
                     Card(

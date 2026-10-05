@@ -42,7 +42,8 @@ function mobile_visit_payload(mysqli $conn, array $visit, bool $withDetails = tr
             "token" => (string) $visit["public_token"],
             "valid_from" => $validFrom->format("Y-m-d H:i:s"),
             "valid_until" => $validUntil->format("Y-m-d H:i:s"),
-            "currently_valid" => $status === "open" && $now >= $validFrom && $now <= $validUntil,
+            // While checked in, the same pass is scanned again at the gate to check out.
+            "currently_valid" => $status === "checked_in" || ($status === "open" && $now >= $validFrom && $now <= $validUntil),
         ];
     }
 
@@ -53,6 +54,8 @@ function mobile_visit_payload(mysqli $conn, array $visit, bool $withDetails = tr
         "status" => $status,
         "checked_in_at" => $visit["checked_in_at"],
         "completed_at" => $visit["completed_at"],
+        // How a finished visit ended: scan, guard, left_campus, or end_of_day.
+        "checkout_method" => isset($visit["checkout_method"]) ? (string) $visit["checkout_method"] : null,
         "tracking_appointment_id" => !empty($visit["tracking_appointment_id"]) ? (int) $visit["tracking_appointment_id"] : null,
         "current_stop_id" => $currentStopId,
         "qr_pass" => $qrPass,

@@ -61,7 +61,9 @@ fields, and configurable mobile policies.
 | POST/DELETE | `/devices.php` | Bearer | Register, rotate, or remove an FCM token |
 | GET/POST | `/consent.php` | Bearer | Inspect, grant, or withdraw GPS consent |
 | GET/POST | `/tracking.php` | Bearer | Inspect/start/stop an appointment session |
-| POST | `/locations.php` | Bearer | Idempotent single/batch GPS uploads |
+| GET | `/campus_map.php?appointment_id=` | Bearer | Campus boundary, gates, destination and stops (with Department Directory locations and recorded arrivals), campus-exit rules, and the arrival rule for the visitor map (`VISITOR_NAVIGATION.md`) |
+| POST | `/arrival.php` | Bearer | Confirmed arrival at an office stop (`method` gps or visitor); notifies the office and Security |
+| POST | `/locations.php` | Bearer | Idempotent single/batch GPS uploads (inside the campus only) |
 
 The machine-readable contract is in `phone_tracker/api/v1/openapi.yaml`.
 
@@ -85,10 +87,14 @@ Security web workflow remains responsible for scanning and recorded exceptions.
    by default), assigns a stable `client_event_id`, and stores unsent points locally.
 6. `locations.php` accepts up to 100 points per batch by default. Re-sending a batch is
    safe: duplicate event IDs are counted but not stored twice.
-7. Completion closes the server tracking session. Points captured before completion
-   may arrive during the 24-hour offline grace period; post-completion captures are
-   rejected.
-8. Raw GPS points use a configurable 90-day default retention. The cleanup worker is a
+7. Positions outside the campus boundary are never stored; the server only notes that
+   the visitor is outside. Three accurate readings outside over five minutes confirm a
+   campus exit: the visit ends and the session closes with `ended_reason = campus_exit`
+   (see `LIVE_MONITORING.md`).
+8. Completion closes the server tracking session. Points captured before completion
+   may arrive during the 24-hour offline grace period; a batch with only later captures
+   gets 409, which tells the app to stop tracking.
+9. Raw GPS points use a configurable 90-day default retention. The cleanup worker is a
    dry run unless explicitly invoked with `--apply`.
 
 These values live in `mobile_api_settings`. Confirm the 90-day retention period with

@@ -18,6 +18,11 @@ val configuredApiUrl = providers.gradleProperty("ISATU_API_BASE_URL").orNull
     ?: localProperties.getProperty("ISATU_API_BASE_URL")
     ?: "http://10.0.2.2/visitor-management-system/phone_tracker/api/v1/"
 val normalizedApiUrl = configuredApiUrl.trimEnd('/') + "/"
+// Map tiles for the visitor's campus map. OpenFreeMap needs no key; an institution can
+// point this at its own MapLibre style (for example MapTiler) in local.properties.
+val configuredMapStyleUrl = providers.gradleProperty("ISATU_MAP_STYLE_URL").orNull
+    ?: localProperties.getProperty("ISATU_MAP_STYLE_URL")
+    ?: "https://tiles.openfreemap.org/styles/liberty"
 
 android {
     namespace = "ph.edu.isatu.visitor"
@@ -27,12 +32,19 @@ android {
         applicationId = "ph.edu.isatu.visitor"
         minSdk = 26
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.3.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "API_BASE_URL", "\"$normalizedApiUrl\"")
         buildConfigField("String", "CONSENT_VERSION", "\"location-v1\"")
+        buildConfigField("String", "MAP_STYLE_URL", "\"$configuredMapStyleUrl\"")
+
+        ndk {
+            // The map engine is native code: ARM phones (64- and 32-bit) and 64-bit
+            // emulators. Leaving out 32-bit x86 keeps the APK about 13 MB smaller.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -96,6 +108,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.11.2")
 
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("org.maplibre.gl:android-sdk:13.6.1")
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-messaging")
     implementation("com.google.zxing:core:3.5.4")

@@ -6,6 +6,7 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/appointment_maintenance.php";
+require_once __DIR__ . "/arrival_service.php";
 require_once __DIR__ . "/personnel.php";
 
 require_permission_json("office.dashboard");
@@ -72,12 +73,13 @@ if ($summaryStmt) {
 
 $recent = [];
 $visitColumns = visit_list_columns($conn, "a");
+$arrivalColumns = arrival_schema_ready($conn) ? ", a.arrived_at, a.arrival_method, a.arrival_accuracy_meters" : "";
 $recentStmt = $conn->prepare(
     "SELECT a.id, a.registration_code, a.visitor_full_name, a.visitor_email,
             a.contact_number, a.visit_type, a.purpose, a.destination, a.subject,
             a.additional_details, a.scheduled_start_at, a.scheduled_end_at,
             a.status, a.rejection_reason, a.created_at, a.status_updated_at,
-            COALESCE(NULLIF(processor.display_name, ''), processor.username, '') AS processed_by{$visitColumns}
+            COALESCE(NULLIF(processor.display_name, ''), processor.username, '') AS processed_by{$visitColumns}{$arrivalColumns}
      FROM appointments a
      LEFT JOIN app_users processor ON processor.id = COALESCE(
         a.approved_by_user_id, a.rejected_by_user_id, a.completed_by_user_id, a.cancelled_by_user_id

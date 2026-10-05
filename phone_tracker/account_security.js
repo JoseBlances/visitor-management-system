@@ -398,9 +398,12 @@
         }
 
         summary("acctSumSession", "good", "Signed in with " + methodLabel(session.auth_method));
+        const idleMinutes = Math.round((session.idle_timeout_seconds || 0) / 60);
         $("acctSessionMeta").textContent = "Signed in " + UI.formatRelative(session.login_at) + " with " + methodLabel(session.auth_method)
-            + ". You're signed out after " + Math.round(session.idle_timeout_seconds / 60) + " minutes of inactivity and by "
-            + UI.formatDateTime(session.expires_at) + " at the latest.";
+            + (idleMinutes > 0
+                ? ". You're signed out after " + idleMinutes + " minutes of inactivity"
+                : ". You stay signed in on this device until you sign out")
+            + (session.expires_at ? ", until " + UI.formatDateTime(session.expires_at) + " at the latest." : ".");
 
         const devices = $("acctDevices");
         devices.replaceChildren();

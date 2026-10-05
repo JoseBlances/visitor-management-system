@@ -1,70 +1,100 @@
 # Visitor map and campus-exit handoff
 
-The Android visitor app now opens `TrackingMapScreen.kt` automatically after Security
-changes an appointment to `checked_in`. The screen already contains the final layout,
-tracking/permission states, destination panel, and map-provider placeholder.
+The Android visitor app opens `TrackingMapScreen.kt` automatically after Security changes
+an appointment to `checked_in`. It shows the live campus map with walking directions and
+voice prompts to the visitor's office; the full behaviour is in `VISITOR_NAVIGATION.md`.
 
-## Backend data still required
+## Backend endpoint (done)
 
-Provide one authenticated mobile endpoint, recommended as:
-
-`GET /phone_tracker/api/v1/campus_map.php?appointment_id={id}`
-
-Suggested response data:
+`GET /phone_tracker/api/v1/campus_map.php?appointment_id={id}` (Bearer, the visitor's own
+appointment; any stop of a multi-office visit) returns:
 
 ```json
 {
+  "appointment_id": 12,
+  "campus_configured": true,
+  "campus_updated_at": "2026-10-04 13:47:05",
+  "campus_boundary": [
+    { "latitude": 10.7159413, "longitude": 122.5661373 }
+  ],
+  "gates": [
+    { "name": "Main Gate", "latitude": 10.7160000, "longitude": 122.5660000 }
+  ],
   "destination": {
+    "appointment_id": 12,
     "office_code": "IT",
     "label": "IT Department",
+    "location": "CCI building, second floor, room 201",
+    "description": "",
     "latitude": 10.0000000,
-    "longitude": 122.0000000
+    "longitude": 122.0000000,
+    "status": "checked_in",
+    "visit_type": "appointment",
+    "scheduled_start_at": "2026-10-04 10:00:00",
+    "scheduled_end_at": "2026-10-04 10:30:00",
+    "arrived_at": null,
+    "arrival_method": null
   },
-  "campus_boundary": [
-    { "latitude": 10.0000000, "longitude": 122.0000000 }
-  ],
+  "stops": [],
   "exit_policy": {
     "minimum_accuracy_meters": 50,
     "outside_confirmation_points": 3,
-    "outside_confirmation_seconds": 45
-  }
+    "outside_confirmation_seconds": 300,
+    "boundary_buffer_meters": 25
+  },
+  "arrival_distance_meters": 3,
+  "arrival_max_accuracy_meters": 8,
+  "arrival_radius_meters": 3,
+  "server_time": "2026-10-04 10:05:12"
 }
 ```
 
-Use official coordinates for the campus polygon and the five permitted destinations:
-IT Department, IS Department, CS Department, Dean's Office, and Tech Support. Store
-these values on the server so the Android app does not need an update when a pin moves.
+An arrival is confirmed only when GPS places the visitor within `arrival_distance_meters`
+of the office pin from readings accurate to `arrival_max_accuracy_meters`, or when the
+visitor taps **I'm here**; the app reports it to `POST /api/v1/arrival.php`
+(`VISITOR_NAVIGATION.md`). `arrival_radius_meters` repeats the distance for app 0.3.0.
 
-## Android map integration point
+The boundary, gates, and office pins come from the administrator's **Campus map setup**,
+and `location`/`description` from the **Department Directory**, so the app needs no update
+when a pin moves. An office without a pin has `null` coordinates. `destination` is the
+first stop still to visit; once every stop is done it is `null` and the app guides the
+visitor to a gate. `stops` lists every stop of a visit.
 
-Replace `CampusMapPlaceholder` inside `TrackingMapScreen.kt` with the selected Android
-map composable. The recommended Google Maps setup needs `MAPS_API_KEY` in uncommitted
-`visitor_app/local.properties`, package restriction for `ph.edu.isatu.visitor`, and both
-debug and release certificate restrictions.
+## Android map (done)
 
-The visitor map should display only:
+Decided on 2026-10-04: MapLibre (`org.maplibre.gl:android-sdk`) with OpenFreeMap tiles,
+which need no API key, account, or billing and use the same OpenStreetMap data as the
+Security dashboard. `ISATU_MAP_STYLE_URL` in `visitor_app/local.properties` can point the
+app at another MapLibre style later (for example MapTiler with an institutional key).
 
-- the visitor's current position;
-- the assigned destination marker;
-- the campus boundary; and
-- tracking/campus-exit status.
+The visitor map displays:
 
-Do not draw a suggested route or the visitor's historical trail on this screen. Route
-history remains available only to authorized Security/Admin analytics.
+- the visitor's current position and heading;
+- the destination office pin (and, for a multi-office visit, the other stops, numbered);
+- gate pins;
+- the campus boundary, with the outside dimmed; and
+- tracking and campus-exit status.
 
-## Server-authoritative campus exit
+The visitor's historical trail is still never shown on this screen; route history stays
+with authorized Security/Admin. There is still no suggested route: the dotted line from
+the visitor to the office is a straight pointer, and the screen tells visitors to follow
+walkways and signs.
 
-Extend `phone_tracker/api/v1/locations.php` to check each accepted GPS point against the
-official boundary. Do not complete a visit after a single outside reading. Confirm an
-exit only after the configured number/duration of accurate readings outside a buffered
-boundary; this prevents GPS drift near gates and building edges from ending visits.
+## Server-authoritative campus exit (done)
 
-After a confirmed exit, the server must atomically:
+`phone_tracker/api/v1/locations.php` (and the visitor website's `save_location.php`)
+check every GPS point against the boundary, with a 25 m buffer for drift at gates and
+building edges. A single outside reading never ends a visit: an exit is confirmed by at
+least three accurate (≤ 50 m) readings outside, the first one five or more minutes ago.
 
-1. mark the appointment `completed` with an exit-specific audit note;
-2. end the location tracking session with `ended_reason = 'campus_exit'`;
-3. enqueue a visitor notification; and
-4. reject subsequent location uploads.
+A confirmed exit then, in one transaction:
 
-For privacy, process outside coordinates only to confirm the boundary transition and do
-not retain the visitor's movement beyond the campus.
+1. marks the visit `completed` (`checkout_method = left_campus`) with an exit-specific
+   history note and audit entry, timed at the moment the visitor stepped outside;
+2. ends the tracking session with `ended_reason = 'campus_exit'`;
+3. notifies the visitor; and
+4. makes later uploads return 409, so the app stops tracking.
+
+Outside coordinates are never stored: they only update the inside/outside state in
+`visitor_presence`. The app warns the visitor on the same rule (same buffer and accuracy)
+and counts down the five minutes. Rules and file names are in `LIVE_MONITORING.md`.

@@ -382,10 +382,11 @@ function visit_history(mysqli $conn, int $appointmentId, string $fromStatus, str
  * Ends a checked-in visit: completes its checked-in stops, stops tracking, and notifies
  * the visitor. The caller owns the transaction and has locked the visit row.
  *
- * $checkout is true when Security ends the visit at the gate. Stops that are still
- * waiting for an office decision are then cancelled because the visitor has left.
+ * $checkout is true when the visitor has left campus. Stops that are still waiting for an
+ * office decision are then cancelled because the visitor has left. $method is how the
+ * visit ended (see presence_service.php); it chooses the visitor's notification.
  */
-function visit_complete(mysqli $conn, array $visit, ?int $actorUserId, string $note, ?string $completedAt, bool $checkout): void
+function visit_complete(mysqli $conn, array $visit, ?int $actorUserId, string $note, ?string $completedAt, bool $checkout, string $method = ""): void
 {
     $visitId = (int) $visit["id"];
     $completedAt = $completedAt ?: date("Y-m-d H:i:s");
@@ -441,41 +442,51 @@ function visit_complete(mysqli $conn, array $visit, ?int $actorUserId, string $n
 
     $trackingAppointmentId = !empty($visit["tracking_appointment_id"]) ? (int) $visit["tracking_appointment_id"] : null;
     if ($trackingAppointmentId) {
+        $endedReason = $method === "left_campus" ? "campus_exit" : "completed";
         $tracking = $conn->prepare(
             "UPDATE location_tracking_sessions
-             SET ended_at = COALESCE(ended_at, ?), ended_reason = 'completed'
+             SET ended_at = COALESCE(ended_at, ?), ended_reason = ?
              WHERE appointment_id = ? AND ended_at IS NULL"
         );
-        $tracking->bind_param("si", $completedAt, $trackingAppointmentId);
+        $tracking->bind_param("ssi", $completedAt, $endedReason, $trackingAppointmentId);
         $tracking->execute();
         $tracking->close();
     }
 
     $notifyAppointmentId = $trackingAppointmentId ?: (isset($stops[0]) ? (int) $stops[0]["id"] : null);
+    if ($method !== "" && function_exists("gate_checkout_message")) {
+        $message = gate_checkout_message($method);
+    } else {
+        $message = $checkout
+            ? "Security completed your campus visit. Location tracking has stopped."
+            : "Your last office stop has ended, so your campus visit is complete. Location tracking has stopped.";
+    }
     visit_notify_visitor(
         $conn,
         (int) $visit["visitor_user_id"],
         $notifyAppointmentId,
         "visit.completed",
         "Visit completed",
-        $checkout
-            ? "Security completed your campus visit. Location tracking has stopped."
-            : "Your last office stop has ended, so your campus visit is complete. Location tracking has stopped.",
+        $message,
         ["visit_id" => $visitId]
     );
-    visit_audit($conn, $actorUserId, $notifyAppointmentId, "visit.completed", $visitId, [
+    visit_audit($conn, $actorUserId, $notifyAppointmentId, "visit.completed", $visitId, array_filter([
         "checkout" => $checkout,
+        "method" => $method !== "" ? $method : null,
         "note" => $note,
         "completed_at" => $completedAt,
-    ]);
+    ], function ($value): bool {
+        return $value !== null;
+    }));
 }
 
 /**
- * Applies time-based visit outcomes after the stop-level maintenance has run.
- * - An open visit with no active stops left is closed.
- * - A checked-in visit with no active stops left completes at the scheduled end of
- *   its last attended stop, so the visitor is tracked until then, as with a single
- *   appointment, unless Security checks them out earlier.
+ * Applies time-based visit outcomes after the stop-level maintenance has run: an open
+ * visit with no active stops left is closed.
+ *
+ * A checked-in visit no longer ends when its office slots end, because the visitor is
+ * still on campus until they leave. It ends at the gate (second scan or End visit), on
+ * a confirmed campus exit, or at the end of the day (see presence_service.php).
  */
 function refresh_visit_states(mysqli $conn): void
 {
@@ -483,13 +494,12 @@ function refresh_visit_states(mysqli $conn): void
         return;
     }
     $result = $conn->query(
-        "SELECT v.id, v.status,
-                COALESCE(SUM(a.status IN ('pending_approval', 'reschedule_proposed', 'approved', 'checked_in')), 0) AS active_stops,
-                MAX(CASE WHEN a.status IN ('checked_in', 'completed') THEN a.scheduled_end_at END) AS attended_end
+        "SELECT v.id,
+                COALESCE(SUM(a.status IN ('pending_approval', 'reschedule_proposed', 'approved', 'checked_in')), 0) AS active_stops
          FROM visits v
          LEFT JOIN appointments a ON a.visit_id = v.id
-         WHERE v.status IN ('open', 'checked_in')
-         GROUP BY v.id, v.status
+         WHERE v.status = 'open'
+         GROUP BY v.id
          HAVING active_stops = 0
          ORDER BY v.id ASC
          LIMIT 100"
@@ -499,29 +509,10 @@ function refresh_visit_states(mysqli $conn): void
     }
     while ($row = $result->fetch_assoc()) {
         $visitId = (int) $row["id"];
-        if ($row["status"] === "open") {
-            $close = $conn->prepare("UPDATE visits SET status = 'closed', closed_at = NOW() WHERE id = ? AND status = 'open'");
-            $close->bind_param("i", $visitId);
-            $close->execute();
-            $close->close();
-            continue;
-        }
-        $attendedEnd = $row["attended_end"] !== null ? (string) $row["attended_end"] : null;
-        if ($attendedEnd !== null && strtotime($attendedEnd) > time()) {
-            continue;
-        }
-        $conn->begin_transaction();
-        try {
-            $visit = visit_load($conn, $visitId, true);
-            if (!$visit || $visit["status"] !== "checked_in") {
-                $conn->rollback();
-                continue;
-            }
-            visit_complete($conn, $visit, null, "Visit automatically completed after its last office stop", $attendedEnd, false);
-            $conn->commit();
-        } catch (Throwable $error) {
-            $conn->rollback();
-        }
+        $close = $conn->prepare("UPDATE visits SET status = 'closed', closed_at = NOW() WHERE id = ? AND status = 'open'");
+        $close->bind_param("i", $visitId);
+        $close->execute();
+        $close->close();
     }
 }
 
@@ -736,6 +727,7 @@ function visit_handle_scan(mysqli $conn, int $visitId, int $securityUserId): arr
     $count = count($checkedIn);
     return array_merge($details, [
         "success" => true,
+        "action" => "checked_in",
         "message" => "Check-in recorded for {$count} office stop" . ($count === 1 ? "" : "s") . ". Visitor GPS can start.",
         "status" => "checked_in",
         "checked_in_at" => date("Y-m-d H:i:s"),

@@ -4,6 +4,11 @@ require_once __DIR__ . "/session_bootstrap.php";
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/appointment_offices.php";
 require_once __DIR__ . "/visit_service.php";
+require_once __DIR__ . "/monitoring_service.php";
+
+// First scan of a pass checks the visitor in. A later scan of the same pass offers a
+// one-tap check-out (scan_checkout.php), except within GATE_RESCAN_GRACE_SECONDS of
+// check-in, when it is treated as an accidental repeat.
 
 if ($_SERVER["REQUEST_METHOD"] !== "POST") {
     http_response_code(405);
@@ -50,7 +55,16 @@ if ($appt && !empty($appt["visit_id"])) {
     $visitId = $visit ? (int) $visit["id"] : 0;
 }
 if ($visitId > 0) {
-    $response = visit_handle_scan($conn, $visitId, $securityUserId);
+    $visit = visit_load($conn, $visitId);
+    if ($visit && in_array($visit["status"], ["checked_in", "completed"], true)) {
+        $details = visit_scan_details($visit, visit_stops($conn, $visitId));
+        $trackingId = (int) $details["appointment_id"];
+        $response = $visit["status"] === "checked_in"
+            ? gate_scan_on_campus($conn, $trackingId, $details)
+            : gate_scan_completed($conn, $trackingId, $details);
+    } else {
+        $response = visit_handle_scan($conn, $visitId, $securityUserId);
+    }
     $conn->close();
     echo json_encode($response);
     exit;
@@ -81,17 +95,15 @@ $details = [
 ];
 
 if ($appt["status"] === "checked_in") {
+    $response = gate_scan_on_campus($conn, $appointmentId, $details);
     $conn->close();
-    echo json_encode(array_merge($details, [
-        "success" => true,
-        "message" => "This visitor is already checked in.",
-        "already_checked_in" => true,
-    ]));
+    echo json_encode($response);
     exit;
 }
 if ($appt["status"] === "completed") {
+    $response = gate_scan_completed($conn, $appointmentId, $details);
     $conn->close();
-    echo json_encode(array_merge($details, ["success" => false, "message" => "This visit has already been completed."]));
+    echo json_encode($response);
     exit;
 }
 
@@ -271,6 +283,7 @@ try {
 $conn->close();
 echo json_encode(array_merge($details, [
     "success" => true,
+    "action" => "checked_in",
     "message" => "Check-in recorded. Visitor GPS can start.",
     "status" => "checked_in",
     "checked_in_at" => date("Y-m-d H:i:s"),

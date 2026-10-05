@@ -96,8 +96,10 @@ function account_security_overview(mysqli $conn, array $user): array
         "session" => [
             "auth_method" => (string) ($_SESSION["auth_method"] ?? "password"),
             "login_at" => date("Y-m-d H:i:s", (int) $_SESSION["login_at"]),
-            "expires_at" => date("Y-m-d H:i:s", (int) $_SESSION["login_at"] + AUTH_ABSOLUTE_TIMEOUT_SECONDS),
-            "idle_timeout_seconds" => AUTH_IDLE_TIMEOUT_SECONDS,
+            "expires_at" => auth_session_max_seconds() > 0
+                ? date("Y-m-d H:i:s", (int) $_SESSION["login_at"] + auth_session_max_seconds())
+                : null,
+            "idle_timeout_seconds" => auth_idle_timeout_seconds(),
             "step_up_valid" => time() - (int) ($_SESSION["step_up_at"] ?? 0) <= AUTH_STEP_UP_SECONDS,
         ],
     ];

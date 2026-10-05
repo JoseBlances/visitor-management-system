@@ -2,8 +2,10 @@
 /*
  * Session handling for the staff and visitor web pages. Every protected endpoint
  * calls one of the require_*_json() guards below, which:
- *   - use a hardened session cookie (HttpOnly, SameSite=Strict, Secure on HTTPS),
- *   - sign the user out after 30 minutes idle or 12 hours in total,
+ *   - use a hardened session cookie (HttpOnly, SameSite=Strict, Secure on HTTPS) that
+ *     survives closing the browser,
+ *   - end the session session_max_hours after sign-in (12 by default); inactivity alone
+ *     signs nobody out unless idle_timeout_minutes is set (see auth_config.php),
  *   - re-check the account on every request, so suspending a user, deleting them,
  *     resetting their password, or "sign out everywhere" takes effect immediately,
  *   - require the CSRF token (X-CSRF-Token header) on every POST/PUT/PATCH/DELETE.
@@ -27,11 +29,16 @@ function auth_start_session(): void
     ini_set("session.use_only_cookies", "1");
     ini_set("session.use_trans_sid", "0");
     ini_set("session.cookie_httponly", "1");
-    // Expiry is enforced below; keep PHP's garbage collector from removing sessions earlier.
-    ini_set("session.gc_maxlifetime", "7200");
+    $lifetime = auth_session_cookie_lifetime();
+    // PHP deletes session files that have not been used for gc_maxlifetime seconds, so
+    // keep them for as long as a session may last. Expiry itself is enforced in
+    // auth_current_user().
+    ini_set("session.gc_maxlifetime", (string) ($lifetime + 3600));
+    auth_use_private_session_folder();
     session_name(AUTH_SESSION_NAME);
     session_set_cookie_params([
-        "lifetime" => 0,
+        // Survives closing the browser; the session still ends at its maximum age.
+        "lifetime" => $lifetime,
         "path" => "/",
         "domain" => "",
         "secure" => auth_request_is_https(),
@@ -40,6 +47,39 @@ function auth_start_session(): void
     ]);
     session_start();
     auth_ensure_csrf_cookie();
+}
+
+/** How long the sign-in cookies last: the maximum session length, or 30 days without one. */
+function auth_session_cookie_lifetime(): int
+{
+    $maxAge = auth_session_max_seconds();
+    return $maxAge > 0 ? $maxAge : 30 * 86400;
+}
+
+/**
+ * Keeps this system's sessions in a folder of their own. Other PHP apps on the same
+ * server (phpMyAdmin on XAMPP) clean the shared session folder using their own, much
+ * shorter, lifetime and would otherwise delete these sessions after 24 idle minutes.
+ */
+function auth_use_private_session_folder(): void
+{
+    if (ini_get("session.save_handler") !== "files") {
+        return;
+    }
+    // session.save_path may be "N;/path" or "N;MODE;/path"; the folder is the last part.
+    $configured = (string) ini_get("session.save_path");
+    $separator = strrpos($configured, ";");
+    $base = $separator === false ? $configured : substr($configured, $separator + 1);
+    if ($base === "") {
+        $base = sys_get_temp_dir();
+    }
+    $folder = rtrim($base, "/\\") . DIRECTORY_SEPARATOR . "isatu_vms_sessions";
+    if (!is_dir($folder)) {
+        @mkdir($folder, 0700, true);
+    }
+    if (is_dir($folder) && is_writable($folder)) {
+        session_save_path($folder);
+    }
 }
 
 function auth_db(): mysqli
@@ -131,7 +171,7 @@ function auth_set_csrf_cookie(string $token): void
     }
     // Readable by auth.js on purpose; it is useless without the HttpOnly session cookie.
     setcookie(AUTH_CSRF_COOKIE, $token, [
-        "expires" => 0,
+        "expires" => time() + auth_session_cookie_lifetime(),
         "path" => "/",
         "secure" => auth_request_is_https(),
         "httponly" => false,
@@ -205,11 +245,13 @@ function auth_current_user(): ?array
         auth_end_session("session_expired");
         return null;
     }
-    if ($now - $lastActivity > AUTH_IDLE_TIMEOUT_SECONDS) {
+    $idleLimit = auth_idle_timeout_seconds();
+    if ($idleLimit > 0 && $now - $lastActivity > $idleLimit) {
         auth_end_session("idle_timeout");
         return null;
     }
-    if ($now - $loginAt > AUTH_ABSOLUTE_TIMEOUT_SECONDS) {
+    $maxAge = auth_session_max_seconds();
+    if ($maxAge > 0 && $now - $loginAt > $maxAge) {
         auth_end_session("session_expired");
         return null;
     }
@@ -265,7 +307,7 @@ function auth_current_user(): ?array
 function auth_session_end_message(string $reason): string
 {
     $messages = [
-        "idle_timeout" => "You were signed out after 30 minutes of inactivity.",
+        "idle_timeout" => "You were signed out after " . intdiv(auth_idle_timeout_seconds(), 60) . " minutes of inactivity.",
         "session_expired" => "Your session expired. Please sign in again.",
         "session_revoked" => "Your session was ended. Please sign in again.",
     ];

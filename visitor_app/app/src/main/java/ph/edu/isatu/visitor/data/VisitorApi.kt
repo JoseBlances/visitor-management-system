@@ -97,4 +97,10 @@ interface VisitorApi {
 
     @POST("locations.php")
     suspend fun uploadLocations(@Body request: LocationBatchRequest): Response<ApiEnvelope<LocationBatchData>>
+
+    @GET("campus_map.php")
+    suspend fun campusMap(@Query("appointment_id") appointmentId: Long): Response<ApiEnvelope<CampusMapData>>
+
+    @POST("arrival.php")
+    suspend fun reportArrival(@Body request: ArrivalRequest): Response<ApiEnvelope<ArrivalData>>
 }

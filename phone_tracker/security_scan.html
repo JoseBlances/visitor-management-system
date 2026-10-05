@@ -6,12 +6,12 @@
     <meta name="theme-color" content="#0755b5">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>Scan Visitor Pass | ISATU Security Dashboard</title>
-    <link rel="stylesheet" href="style.css?v=20261003-3">
+    <link rel="stylesheet" href="style.css?v=20261005-2">
     <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 </head>
 <body class="admin-page security-page security-scan-page">
     <header class="admin-topbar">
-        <a class="admin-brand" href="dashboard.html?v=20260917-3" aria-label="ISATU Security Dashboard home">
+        <a class="admin-brand" href="dashboard.html?v=20261004-2" aria-label="ISATU Security Dashboard home">
             <span class="admin-brand-mark" aria-hidden="true">
                 <img src="assets/images/isatu-logo.png" alt="">
             </span>
@@ -31,7 +31,7 @@
             </button>
             <div class="admin-profile-menu" id="securityProfileMenu" hidden>
                 <p>Signed in as <strong id="securityProfileUsername">security</strong></p>
-                <a class="security-admin-link" id="securityAdminLink" href="admin.html?v=20260917-2" hidden>Open Admin Dashboard</a>
+                <a class="security-admin-link" id="securityAdminLink" href="admin.html?v=20261004-1" hidden>Open Admin Dashboard</a>
                 <button type="button" id="logoutBtn">Sign out</button>
             </div>
         </div>
@@ -40,11 +40,11 @@
     <div class="admin-layout security-layout">
         <aside class="admin-sidebar security-sidebar" aria-label="Security navigation">
             <nav>
-                <a class="admin-nav-item" href="dashboard.html?v=20260917-3">
+                <a class="admin-nav-item" href="dashboard.html?v=20261004-2">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>
                     <span>Security Dashboard</span>
                 </a>
-                <a class="admin-nav-item" href="dashboard.html?v=20260917-3#monitoring">
+                <a class="admin-nav-item" href="dashboard.html?v=20261004-2#monitoring">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-4.35 7-11A7 7 0 0 0 5 10c0 6.65 7 11 7 11Zm0-8a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></svg>
                     <span>Visitor Monitoring</span>
                 </a>
@@ -56,9 +56,9 @@
                 <div>
                     <p class="admin-eyebrow">Visitor check-in</p>
                     <h1>Scan visitor pass</h1>
-                    <p>Place the visitor's QR code inside the frame. A valid pass checks the visitor in automatically.</p>
+                    <p>Place the visitor's QR code inside the frame. The first scan checks the visitor in; scan the same pass again when they leave to check them out.</p>
                 </div>
-                <a class="security-scan-back" href="dashboard.html?v=20260917-3">
+                <a class="security-scan-back" href="dashboard.html?v=20261004-2">
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
                     Back to dashboard
                 </a>
@@ -119,6 +119,7 @@
                             <svg class="security-result-ready-icon" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4M9 12h6"/></svg>
                             <svg class="security-result-success-icon" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>
                             <svg class="security-result-error-icon" viewBox="0 0 24 24"><path d="M12 8v5M12 17h.01M10.3 3.8 2.7 17a2 2 0 0 0 1.73 3h15.14a2 2 0 0 0 1.73-3L13.7 3.8a2 2 0 0 0-3.4 0Z"/></svg>
+                            <svg class="security-result-checkout-icon" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
                         </span>
                         <div>
                             <p class="security-result-label" id="scanResultLabel">Scanner ready</p>
@@ -131,6 +132,14 @@
                                 <div id="scanWindowRow" hidden><dt>Pass window</dt><dd id="scanWindow">-</dd></div>
                                 <div id="scanTimeInRow" hidden><dt>Time in</dt><dd id="scanTimeIn">-</dd></div>
                             </dl>
+                            <div class="security-checkout" id="checkoutPanel" hidden>
+                                <p class="security-checkout-stay" id="checkoutStay" hidden></p>
+                                <ul class="security-checkout-warnings" id="checkoutWarnings" hidden></ul>
+                                <button class="security-checkout-button" id="confirmCheckoutBtn" type="button">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/></svg>
+                                    <span>Check out visitor</span>
+                                </button>
+                            </div>
                             <button class="security-override-button" id="openQrOverrideBtn" type="button" hidden>Authorize time override</button>
                             <button class="security-scan-next" id="scanNextBtn" type="button" hidden>Scan next visitor</button>
                         </div>
@@ -185,9 +194,9 @@
         </form>
     </dialog>
 
-    <script src="auth.js?v=20261003-1"></script>
+    <script src="auth.js?v=20261004-1"></script>
     <script src="auth_ui.js?v=20261003-1"></script>
-    <script src="account_security.js?v=20261003-1"></script>
-    <script src="security_scan.js?v=20260922-2"></script>
+    <script src="account_security.js?v=20261004-1"></script>
+    <script src="security_scan.js?v=20261004-2"></script>
 </body>
 </html>

@@ -209,7 +209,7 @@
             pending_approval: "<strong>Appointment request sent.</strong> Waiting for the office to respond.",
             reschedule_proposed: "<strong>The office suggested another schedule.</strong> Review the proposed time in your notifications.",
             approved: "<strong>Appointment approved.</strong> Present this QR code to security during the valid time window.",
-            checked_in: "<strong>You are checked in.</strong> Location tracking is active for this visit.",
+            checked_in: "<strong>You are checked in.</strong> Show this QR code to Security again when you leave to check out.",
             rejected: "<strong>Appointment declined.</strong> Check the office response before requesting another schedule.",
             unanswered: "<strong>The office did not respond in time.</strong> Please request another appointment.",
             cancelled: "<strong>Appointment cancelled.</strong> You may create another appointment.",
@@ -223,7 +223,7 @@
             if (normalizedStatus === "approved") {
                 checkInHint.textContent = "The QR becomes scannable 30 minutes before your appointment and remains valid until its scheduled end.";
             } else if (normalizedStatus === "checked_in") {
-                checkInHint.textContent = "Security checked you in. GPS tracking has started.";
+                checkInHint.textContent = "Security checked you in. Your location is shared only while you are inside the campus.";
             } else {
                 checkInHint.textContent = "A QR visitor pass is available only after office approval.";
             }
@@ -444,7 +444,7 @@
                     });
                     const result = await response.json();
                     if (result.success) {
-                        setTrackingStatus("active.");
+                        setTrackingStatus(result.outside_campus ? "paused while you are outside the campus." : "active.");
                     } else {
                         setTrackingStatus("server error: " + result.message);
                     }
@@ -515,7 +515,7 @@
                         visitCompleteNotice.hidden = true;
                     }
                     if (checkInHint) {
-                        checkInHint.textContent = "Security checked you in. GPS tracking has started.";
+                        checkInHint.textContent = "Security checked you in. Your location is shared only while you are inside the campus.";
                     }
                     if (!autoStarted && watchId === null) {
                         autoStarted = true;

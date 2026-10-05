@@ -135,7 +135,8 @@ function admin_security_overview(mysqli $conn, string $filter): array
             "account_alarm_failures" => AUTH_ACCOUNT_ALARM_FAILURES,
             "account_alarm_ips" => AUTH_ACCOUNT_ALARM_MIN_IPS,
             "ip_failures" => AUTH_IP_FAILURES,
-            "idle_minutes" => intdiv(AUTH_IDLE_TIMEOUT_SECONDS, 60),
+            "idle_minutes" => intdiv(auth_idle_timeout_seconds(), 60),
+            "session_max_hours" => intdiv(auth_session_max_seconds(), 3600),
             "two_factor_required_roles" => auth_config()["two_factor_required_roles"],
         ],
     ];
