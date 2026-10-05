@@ -12,6 +12,7 @@
  * auth.js sends the CSRF token automatically.
  */
 
+require_once __DIR__ . "/runtime.php";
 require_once __DIR__ . "/auth_config.php";
 require_once __DIR__ . "/auth_security.php";
 require_once __DIR__ . "/permissions.php";

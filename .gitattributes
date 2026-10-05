@@ -1,0 +1,4 @@
+# Files that run inside the Linux server image keep Linux line endings on every computer.
+Dockerfile text eol=lf
+docker/** text eol=lf
+*.sh text eol=lf

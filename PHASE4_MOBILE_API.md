@@ -26,10 +26,9 @@ fields, and configurable mobile policies.
 - Send and receive JSON using UTF-8.
 - Authenticated requests use `Authorization: Bearer <access_token>`.
 - Raw access tokens are never stored in the database; only SHA-256 hashes are stored.
-  Password-reset validation uses hashes as well. Until an email provider is wired,
-  the short-lived raw action token is present only in its Git-excluded outbound-email
-  queue payload so the future sender can deliver it; clear that payload after delivery
-  or replace it with provider-side immediate sending before production.
+  Password-reset validation uses hashes as well. The short-lived raw recovery code waits
+  in its `outbound_emails` row only until the email worker sends it or gives up; the
+  worker then deletes it from the row.
 - Access tokens expire after 30 days by default and are revoked by sign-out or password
   reset.
 - Authentication and recovery requests are rate-limited by identity and IP address.
@@ -116,19 +115,25 @@ Configuration:
 1. Copy `phone_tracker/config/mobile_api.example.php` to `mobile_api.php`.
 2. Add the Firebase project ID.
 3. Place the service-account file outside the public web root when deployed, then set
-   its path through `FIREBASE_SERVICE_ACCOUNT_FILE` or the local config.
+   its path through `FIREBASE_SERVICE_ACCOUNT_FILE` or the local config. A hosted server
+   can instead put the whole JSON (or its base64) in `FIREBASE_SERVICE_ACCOUNT_JSON`; the
+   project ID is then read from it.
 4. Enable the Firebase Cloud Messaging API v1.
-5. Schedule the worker (for example every minute) after a successful real-device test.
+5. `workers/run_scheduled_jobs.php` runs the worker every minute together with the
+   other background jobs (`DEPLOYMENT.md`).
 
 The repository contains no Firebase credential. Without configuration, the worker exits
 safely and queued in-app notifications continue to work.
 
 ## Account recovery email
 
-Password-reset messages are placed in `outbound_emails`. A deployment email provider
-still needs to consume that queue. This keeps account recovery secure:
-production endpoints do not return reset tokens and always use a generic response for
-unknown email addresses.
+Password-reset messages are placed in `outbound_emails`, and
+`workers/send_outbound_emails.php` (`mail_service.php`) sends them through Brevo, Resend,
+or SMTP, as configured by environment variables (`DEPLOYMENT.md`, step 4). Failed sends
+are retried after 1, 2, 4, and 8 minutes; a code that expires first is not sent.
+`php phone_tracker/workers/send_outbound_emails.php --test you@example.com` checks the
+setup. Production endpoints never return reset tokens and always use a generic response
+for unknown email addresses.
 
 ## Kotlin handoff for Phase 5
 

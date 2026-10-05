@@ -1,0 +1,18 @@
+# Only the web server goes into the image (the Dockerfile copies index.php and
+# phone_tracker/). Local secrets and uploads never do.
+.git
+.github
+.backups
+.android-user
+.gradle-user
+.gradle-project-cache
+visitor_app
+**/*.md
+debug.log
+phone_tracker/config/auth.php
+phone_tracker/config/auth_secret.php
+phone_tracker/config/mobile_api.php
+phone_tracker/config/*.json
+phone_tracker/config/*.tmp
+phone_tracker/uploads/profile_pictures/*
+!phone_tracker/uploads/profile_pictures/.htaccess

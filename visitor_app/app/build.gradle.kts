@@ -23,6 +23,20 @@ val normalizedApiUrl = configuredApiUrl.trimEnd('/') + "/"
 val configuredMapStyleUrl = providers.gradleProperty("ISATU_MAP_STYLE_URL").orNull
     ?: localProperties.getProperty("ISATU_MAP_STYLE_URL")
     ?: "https://tiles.openfreemap.org/styles/liberty"
+// Release builds (the APK handed to visitors) talk to the hosted server, which must use
+// HTTPS; debug builds keep ISATU_API_BASE_URL for testing on the laptop. See DEPLOYMENT.md.
+val configuredReleaseApiUrl = providers.gradleProperty("ISATU_RELEASE_API_BASE_URL").orNull
+    ?: localProperties.getProperty("ISATU_RELEASE_API_BASE_URL")
+    ?: configuredApiUrl
+val normalizedReleaseApiUrl = configuredReleaseApiUrl.trimEnd('/') + "/"
+// The release signing key, described in visitor_app/keystore.properties (never committed).
+// Every update must be signed with the same key or phones refuse to install it.
+val keystoreProperties = Properties().apply {
+    val propertiesFile = rootProject.file("keystore.properties")
+    if (propertiesFile.exists()) propertiesFile.inputStream().use(::load)
+}
+val releaseSigningReady = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+    .all { !keystoreProperties.getProperty(it).isNullOrBlank() }
 
 android {
     namespace = "ph.edu.isatu.visitor"
@@ -47,11 +61,26 @@ android {
         }
     }
 
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             versionNameSuffix = "-debug"
         }
         release {
+            buildConfigField("String", "API_BASE_URL", "\"$normalizedReleaseApiUrl\"")
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -75,6 +104,28 @@ android {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 }
+
+// A release APK that cannot reach the server, or that phones would refuse to install as an
+// update, is stopped before anything is built.
+val checkReleaseSettings by tasks.registering {
+    val apiUrl = normalizedReleaseApiUrl
+    val signingReady = releaseSigningReady
+    doLast {
+        if (!apiUrl.startsWith("https://")) {
+            throw GradleException(
+                "Release builds need the hosted server's https:// address. Set ISATU_RELEASE_API_BASE_URL " +
+                    "in visitor_app/local.properties (currently $apiUrl). See DEPLOYMENT.md.",
+            )
+        }
+        if (!signingReady) {
+            throw GradleException(
+                "Release builds need visitor_app/keystore.properties with storeFile, storePassword, keyAlias, " +
+                    "and keyPassword. See DEPLOYMENT.md.",
+            )
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(checkReleaseSettings) }
 
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")

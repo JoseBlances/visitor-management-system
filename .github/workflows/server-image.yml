@@ -1,0 +1,98 @@
+# Builds the server image and starts it next to a real MariaDB, so a deployment that would
+# fail on Railway fails here first (DEPLOYMENT.md).
+name: Server image
+
+on:
+  push:
+    paths:
+      - "index.php"
+      - "phone_tracker/**"
+      - "Dockerfile"
+      - "docker/**"
+      - ".dockerignore"
+      - ".github/workflows/server-image.yml"
+  pull_request:
+    paths:
+      - "index.php"
+      - "phone_tracker/**"
+      - "Dockerfile"
+      - "docker/**"
+      - ".dockerignore"
+      - ".github/workflows/server-image.yml"
+  workflow_dispatch:
+
+jobs:
+  build-and-start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t isatu-vms .
+
+      - name: Start MariaDB (the version DEPLOYMENT.md recommends)
+        run: |
+          docker network create isatu
+          docker run -d --name db --network isatu \
+            -e MARIADB_ROOT_PASSWORD=root-secret -e MARIADB_DATABASE=app \
+            -e MARIADB_USER=isatu -e MARIADB_PASSWORD=isatu-secret \
+            mariadb:11.4
+
+      - name: Start the web server
+        run: |
+          docker run -d --name web --network isatu -p 8080:8080 \
+            -e ISATU_DATABASE_URL=mysql://isatu:isatu-secret@db:3306/app \
+            -e ISATU_ADMIN_PASSWORD=Smoke-Test-Admin-1 \
+            isatu-vms
+
+      - name: Wait until it is healthy
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/phone_tracker/api/v1/health.php; then
+              exit 0
+            fi
+            sleep 3
+          done
+          docker logs web
+          exit 1
+
+      - name: Pages, privacy rules, uploads, and sign-in
+        run: |
+          set -eu
+          base=http://localhost:8080/phone_tracker
+          status() { curl -s -o /dev/null -w '%{http_code}' "$1"; }
+          test "$(status http://localhost:8080/)" = 302
+          test "$(status $base/login.html)" = 200
+          for private in config/auth.example.php tools/setup_database.php uploads/profile_pictures/; do
+            code=$(status "$base/$private")
+            echo "$private -> $code"
+            test "$code" = 403
+          done
+          curl -sI "$base/login.html" | grep -i "^content-security-policy:"
+
+          # Photos on the /data volume are served; scripts placed there are not.
+          docker exec web sh -c 'echo ok > /data/uploads/profile_pictures/ci.txt && echo "<?php echo 1;" > /data/uploads/profile_pictures/ci.php'
+          test "$(curl -s "$base/uploads/profile_pictures/ci.txt")" = ok
+          test "$(status $base/uploads/profile_pictures/ci.php)" = 403
+
+          # The published password "password" no longer works; the chosen one asks for a new password.
+          jar=$(mktemp)
+          curl -s -c "$jar" -b "$jar" "$base/session_status.php" > /dev/null
+          token=$(awk '$6 == "ISATU_VMS_CSRF" {print $7}' "$jar")
+          login() { curl -s -c "$jar" -b "$jar" -H "Content-Type: application/json" -H "X-CSRF-Token: $token" -d "$1" "$base/login.php"; }
+          login '{"username":"admin","password":"password"}' | grep -q '"invalid_credentials"'
+          login '{"username":"admin","password":"Smoke-Test-Admin-1"}' | grep -q '"password_change_required"'
+
+          # A restart keeps the database as it is and reports ready.
+          docker restart web
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$base/api/v1/health.php" > /dev/null; then break; fi
+            sleep 3
+          done
+          # The second start imports nothing ("up to date." without a file count).
+          docker logs web 2>&1 | grep -q '^Database is up to date\.$'
+
+      - name: Startup log
+        if: always()
+        run: docker logs web

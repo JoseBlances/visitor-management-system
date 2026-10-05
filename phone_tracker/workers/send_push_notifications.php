@@ -10,9 +10,12 @@ require_once dirname(__DIR__) . "/db.php";
 
 function worker_config(): array
 {
+    // A hosted server can pass the whole service-account JSON (or its base64) in
+    // FIREBASE_SERVICE_ACCOUNT_JSON instead of a file; the project id is then read from it.
     $config = [
-        "firebase_project_id" => getenv("FIREBASE_PROJECT_ID") ?: "",
-        "firebase_service_account_file" => getenv("FIREBASE_SERVICE_ACCOUNT_FILE") ?: "",
+        "firebase_project_id" => isatu_env("FIREBASE_PROJECT_ID", ""),
+        "firebase_service_account_file" => isatu_env("FIREBASE_SERVICE_ACCOUNT_FILE", ""),
+        "firebase_service_account_json" => isatu_env("FIREBASE_SERVICE_ACCOUNT_JSON", ""),
     ];
     $local = dirname(__DIR__) . "/config/mobile_api.php";
     if (is_file($local)) {
@@ -104,13 +107,27 @@ function fcm_error_code(array $response): string
 $config = worker_config();
 $projectId = trim((string) ($config["firebase_project_id"] ?? ""));
 $credentialsFile = trim((string) ($config["firebase_service_account_file"] ?? ""));
-if ($projectId === "" || $credentialsFile === "" || !is_file($credentialsFile)) {
-    fwrite(STDERR, "Firebase is not configured. Copy config/mobile_api.example.php to mobile_api.php and provide a service-account file.\n");
+$credentialsJson = trim((string) ($config["firebase_service_account_json"] ?? ""));
+if ($credentialsJson !== "" && $credentialsJson[0] !== "{") {
+    $credentialsJson = trim((string) base64_decode($credentialsJson, true));
+}
+if ($credentialsJson === "" && $credentialsFile !== "" && is_file($credentialsFile)) {
+    $credentialsJson = (string) file_get_contents($credentialsFile);
+}
+if ($credentialsJson === "") {
+    fwrite(STDERR, "Push notifications are not set up (optional). Set FIREBASE_SERVICE_ACCOUNT_JSON, or copy config/mobile_api.example.php to mobile_api.php and provide a service-account file.\n");
     exit(2);
 }
-$serviceAccount = json_decode((string) file_get_contents($credentialsFile), true);
+$serviceAccount = json_decode($credentialsJson, true);
 if (!is_array($serviceAccount)) {
     fwrite(STDERR, "Firebase service-account JSON is invalid.\n");
+    exit(2);
+}
+if ($projectId === "") {
+    $projectId = trim((string) ($serviceAccount["project_id"] ?? ""));
+}
+if ($projectId === "") {
+    fwrite(STDERR, "Firebase project id is missing. Set FIREBASE_PROJECT_ID.\n");
     exit(2);
 }
 try {

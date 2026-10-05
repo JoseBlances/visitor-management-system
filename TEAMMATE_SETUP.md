@@ -46,6 +46,12 @@ JSON for this Android client file.
    again safely. Do not import `app_users_office_code_migration.sql`,
    `appointments_status_migration.sql`, or `phase1_workflow_migration.sql` into a new
    database; they only upgrade databases created before those changes.
+
+   Instead of importing by hand, you can run
+   `C:\xampp\php\php.exe phone_tracker\tools\setup_database.php`, which imports whatever
+   is missing in this order (and loads the ISATU campus map into an empty map). The online
+   server runs the same tool on every start. **When you add a migration**, append it both
+   to this list and to `SETUP_FILES` in `phone_tracker/tools/setup_database.php`.
 6. Open `http://localhost/visitor-management-system/` and test the staff website. The
    first sign-in is different now; see **Sign-in security** below.
 7. In Android Studio, open the `visitor_app` folder, not the repository root.
@@ -170,8 +176,9 @@ or emulator selected. The command-line verification used by the project owner is
 ```
 
 The debug APK is generated at
-`visitor_app/app/build/outputs/apk/debug/app-debug.apk`. Do not distribute the unsigned
-release APK as a production application.
+`visitor_app/app/build/outputs/apk/debug/app-debug.apk`. It is for testing only. The app
+handed to visitors is the signed release build that talks to the online server over
+HTTPS; `DEPLOYMENT.md` explains how to put the system online and build that app.
 
 ## Required acceptance workflow
 
