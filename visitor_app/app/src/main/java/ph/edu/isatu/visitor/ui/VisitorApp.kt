@@ -16,9 +16,14 @@ fun VisitorApp(viewModel: AppViewModel) {
         state.initializing -> Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center,
-        ) { LoadingBlock("Preparing your visitor account…") }
+        ) { LoadingBlock("Preparing your account…") }
 
         !state.signedIn -> AuthFlow(state, viewModel)
+        state.noticeAgreementNeeded -> TermsAgreementScreen(
+            busy = state.busy,
+            onAgree = viewModel::agreeToNotice,
+            onSignOut = viewModel::logout,
+        )
         else -> MainShell(state, viewModel)
     }
 }

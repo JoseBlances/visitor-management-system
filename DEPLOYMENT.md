@@ -10,7 +10,7 @@ report. Plan about an hour for the first deployment.
 
 | Part | What it is |
 |---|---|
-| **Web service** | This repository's `Dockerfile`: Apache and PHP 8.2 serving `phone_tracker`, plus the background jobs (emails, push notifications, visit timing, location-history cleanup). |
+| **Web service** | This repository's `Dockerfile`: Apache and PHP 8.2 serving `phone_tracker`, plus the background jobs (emails, push notifications, visit timing, location-history cleanup, and the daily 1-year cleanup the Terms and Privacy Notice promises: `record_retention_service.php`). |
 | **MariaDB service** | The database. It must be MariaDB, not MySQL: the database files use MariaDB syntax that MySQL rejects. |
 | **Two volumes** | `/var/lib/mysql` on MariaDB (the data) and `/data` on the web service (sign-in sessions and staff photos). Without them, every deploy loses that data. |
 | **Android app** | Built on your laptop with the HTTPS address inside, then shared as an APK. |
@@ -118,9 +118,11 @@ Then open your address, sign in as `admin` with the temporary password, choose y
 password, and set up two-step verification with Google or Microsoft Authenticator. Keep
 the backup codes it shows.
 
-## 4. Email for password-reset codes
+## 4. Email for sign-up and password-reset codes
 
-Visitors who forget their password receive a recovery code by email.
+Every new visitor account confirms its email with a 6-digit code
+([PHASE4_MOBILE_API.md](PHASE4_MOBILE_API.md), "Creating an account"), and visitors who forget
+their password receive a recovery code. **Without email, nobody can sign up.**
 
 1. In Brevo, open **Senders, Domains & Dedicated IPs → Senders**, add the address emails
    should come from (for example the office's Gmail), and confirm it from that inbox.
@@ -131,7 +133,12 @@ Visitors who forget their password receive a recovery code by email.
    |---|---|
    | `BREVO_API_KEY` | the key |
    | `MAIL_FROM_ADDRESS` | the confirmed sender address |
-   | `MAIL_FROM_NAME` | optional, defaults to `ISATU Visitor Management` |
+   | `MAIL_FROM_NAME` | optional, the website's sender name, defaults to `ISATU Visitor Management` |
+   | `MAIL_APP_FROM_NAME` | optional, the app's emails (sign-up codes, password resets), defaults to `ISATU Visits` |
+
+   The app's emails show the ISATU seal at the top, loaded from the site's public address
+   (`PUBLIC_BASE_URL`, or Railway's own domain). The inbox picture beside the sender's name
+   is not set by these emails: Gmail shows the sender account's profile photo, if any.
 
 4. After the redeploy, send yourself a test with the
    [Railway CLI](https://docs.railway.com/cli/ssh) (it asks you to register an SSH key
@@ -141,7 +148,8 @@ Visitors who forget their password receive a recovery code by email.
    railway ssh -s web -- php /var/www/html/phone_tracker/workers/send_outbound_emails.php --test you@example.com
    ```
 
-Brevo's free plan sends 300 emails a day. Mail from a Gmail sender can land in spam; tell
+Brevo's free plan sends 300 emails a day, shared by sign-up codes and password resets; a busy
+week may need a paid plan or the school's own mail server. Mail from a Gmail sender can land in spam; tell
 visitors to check there. Other options: `RESEND_API_KEY` for [Resend](https://resend.com)
 if you own a domain, or `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and
 `SMTP_ENCRYPTION` on a host that allows SMTP (Railway Pro, a school server).
@@ -159,30 +167,36 @@ if you own a domain, or `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWOR
 
 ## 6. The Android app for visitors
 
-The release app is signed with the key in `C:\Users\HP\isatu-visitor-signing`, which is
-described in `visitor_app/keystore.properties`. Neither is in Git.
+Release APKs are built on **one build laptop**: the laptop of the team member who builds
+the releases. It holds the signing folder `isatu-visitor-signing` in that person's user
+folder, with the key (`isatu-visitor-release.jks`) and its passwords (`keystore.properties`).
+Neither is in Git. Build every release there: phones only install an update signed with the
+same key.
 
-1. Add your address to `visitor_app/local.properties`:
+1. Add the hosted address to `visitor_app/local.properties`:
 
    ```
-   ISATU_RELEASE_API_BASE_URL=https://isatu-visitors.up.railway.app/phone_tracker/api/v1/
+   ISATU_RELEASE_API_BASE_URL=https://isatu-visitor.up.railway.app/phone_tracker/api/v1/
    ```
 
-   Keep the existing `ISATU_API_BASE_URL` line: test builds keep using the laptop.
-2. Build it in PowerShell:
+   Keep any `ISATU_API_BASE_URL` line: test builds keep using a laptop on the same Wi-Fi.
+2. Copy `keystore.properties` from the signing folder to `visitor_app/keystore.properties`.
+   Its `storeFile` line holds the full path of the key file, with forward slashes.
+3. Build it in PowerShell, with `JAVA_HOME` set to JDK 17 or newer (Android Studio's own
+   `jbr` folder works):
 
    ```powershell
-   cd C:\xampp\htdocs\visitor-management-system\visitor_app
-   $env:JAVA_HOME = "C:\Users\HP\AppData\Local\Android\jdk-21"
-   .\gradlew.bat assembleRelease --no-daemon
+   cd <project folder>\visitor_app
+   $env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"
+   .\gradlew.bat testDebugUnitTest assembleRelease --no-daemon
    ```
 
    The build stops with an explanation if the address is not `https://` or the signing
    key is missing.
-3. Share `visitor_app\app\build\outputs\apk\release\app-release.apk` (Google Drive works).
-4. A phone that has the test version must uninstall it first, because the release is
-   signed with a different key.
-5. For every new version, raise `versionCode` and `versionName` in
+4. Share `visitor_app\app\build\outputs\apk\release\app-release.apk` (Google Drive works).
+5. A phone that has an app signed with another key (a test version, or a build from another
+   laptop) must uninstall it first.
+6. For every new version, raise `versionCode` and `versionName` in
    `visitor_app/app/build.gradle.kts`.
 
 **Back up the signing folder** (`isatu-visitor-signing`, which holds the key and a copy of
@@ -213,6 +227,12 @@ The app works without them; visitors see updates when they open it. To turn them
   image, starts it next to MariaDB, and tests sign-in, privacy rules, and uploads on every
   push that touches the server. On a fork, enable it once under the **Actions** tab. Deploy
   only when it is green.
+- **Seeing an update:** `phone_tracker/.htaccess` makes browsers ask the server before reusing
+  a saved page, script, or style (`Cache-Control: no-cache`; the server answers "not changed"
+  when it still matches). An update therefore shows on the next visit, with no special refresh.
+  A tab that is already open keeps what it loaded until it is refreshed. Link to a page by its
+  plain name (`offices.html`), never with a `?v=` number: a second address for a page is a
+  second saved copy. The server check fails if the rule goes missing.
 
 ## Day-to-day operations
 
@@ -235,7 +255,8 @@ The app works without them; visitors see updates when they open it. To turn them
 4. Set `ISATU_AUTH_SECRET` to the value inside `phone_tracker/config/auth_secret.php`
    (between the quotes), so existing authenticator setups keep working.
 5. Turn the TCP proxy off and deploy the web service. It records the existing tables and
-   applies any missing changes. Staff upload their profile photos again.
+   applies any missing changes. Staff upload their profile photos again, and administrators
+   the photos in their directions inside buildings.
 
 ## Settings reference
 
@@ -247,6 +268,7 @@ The app works without them; visitors see updates when they open it. To turn them
 | `BREVO_API_KEY`, `MAIL_FROM_ADDRESS` | for email | See step 4. `MAIL_FROM_NAME`, `MAIL_REPLY_TO`, and `MAIL_TRANSPORT` (`brevo`, `resend`, `smtp`) are optional. |
 | `ISATU_ADMIN_PASSWORD` | no | The admin's temporary password on the very first start. |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | no | Push notifications (step 7). |
+| `PUBLIC_BASE_URL` | no | The address of `phone_tracker`, for the ISATU seal in the app's emails. Without it, the address the request came in on is used, or Railway's own. |
 | `ISATU_TRUST_PROXY` | set by the image | `1`: read the visitor's address and HTTPS from Railway's proxy. Use `0` on a server without a proxy in front. |
 | `VISITOR_APP_ENV` | set by the image | `production`. Never `development` online: it shows reset codes in API replies. |
 

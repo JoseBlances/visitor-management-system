@@ -153,8 +153,11 @@
             remove.className = "campus-setup-remove";
             remove.setAttribute("aria-label", "Remove " + title);
             remove.textContent = "×";
-            remove.addEventListener("click", function () {
-                onRemove();
+            remove.addEventListener("click", async function () {
+                // onRemove returns (or resolves to) false when the admin changes their mind.
+                if ((await onRemove()) === false) {
+                    return;
+                }
                 markDirty();
                 render();
             });
@@ -190,7 +193,24 @@
                 point
                     ? placementText(placement.placed_by, placement.accuracy_meters) + " · " + point[0].toFixed(5) + ", " + point[1].toFixed(5)
                     : "Not placed yet",
-                point ? function () { delete state.offices[code]; delete state.officePlacement[code]; } : null
+                point ? async function () {
+                    // The pin is the visitor's destination; say what removing it changes.
+                    const routeCount = window.CampusRoutes ? window.CampusRoutes.countFor(code) : 0;
+                    const consequence = routeCount > 0
+                        ? "Visitors will be guided to where its walking route ends instead."
+                        : officeNames[code] + " has no walking route either, so visitors will get no directions to it.";
+                    if (!(await AppDialog.confirm({
+                        title: "Remove the " + officeNames[code] + " pin?",
+                        message: consequence,
+                        confirmLabel: "Remove pin",
+                        danger: true,
+                    }))) {
+                        return false;
+                    }
+                    delete state.offices[code];
+                    delete state.officePlacement[code];
+                    return true;
+                } : null
             ));
         });
     }
@@ -588,8 +608,13 @@
             render();
         }
     });
-    element("campusClearBoundaryBtn").addEventListener("click", function () {
-        if (state.boundary.length > 0 && window.confirm("Remove all boundary corners?")) {
+    element("campusClearBoundaryBtn").addEventListener("click", async function () {
+        if (state.boundary.length > 0 && await AppDialog.confirm({
+            title: "Remove all boundary corners?",
+            message: "This clears the campus outline. Nothing changes for visitors until you save.",
+            confirmLabel: "Remove corners",
+            danger: true,
+        })) {
             state.boundary = [];
             markDirty();
             render();

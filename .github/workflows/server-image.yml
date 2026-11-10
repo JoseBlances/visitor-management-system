@@ -58,6 +58,16 @@ jobs:
           echo "::error title=Server check failed::The server did not answer its health check within 3 minutes. See the Startup log step."
           exit 1
 
+      - name: Weekly break rules
+        run: docker exec web php /var/www/html/phone_tracker/tools/office_breaks_test.php
+
+      - name: Directions inside buildings
+        run: docker exec web php /var/www/html/phone_tracker/tools/office_directions_test.php --database
+      - name: Removing accounts with history
+        run: docker exec web php /var/www/html/phone_tracker/tools/account_removal_test.php
+      - name: Keeping records 1 year, as the notice says
+        run: docker exec web php /var/www/html/phone_tracker/tools/record_retention_test.php
+
       # Each failed check is written as an error note, which shows on the pull request
       # without opening the log.
       - name: Pages, privacy rules, uploads, and sign-in
@@ -84,11 +94,21 @@ jobs:
           [ "$listing" = 403 ] || [ "$listing" = 404 ] || fail "Uploads folder: expected no listing (403 or 404), got $listing"
           headers=$(curl -sI "$base/login.html")
           contains "$headers" "content-security-policy:" || fail "Sign-in page: Content-Security-Policy header missing"
+          # Browsers must recheck these, or an update stays hidden behind their saved copies.
+          for file in login.html offices.html login.js style.css; do
+            contains "$(curl -sI "$base/$file")" "cache-control: no-cache" || fail "$file: browsers may keep showing an old copy (Cache-Control: no-cache missing)"
+          done
 
           # Photos on the /data volume are served; scripts placed there are not.
           docker exec web sh -c 'echo ok > /data/uploads/profile_pictures/ci.txt && echo "<?php echo 1;" > /data/uploads/profile_pictures/ci.php'
           expect "Photo on the /data volume" "$(curl -s "$base/uploads/profile_pictures/ci.txt")" ok
           expect "Script in the uploads folder" "$(status $base/uploads/profile_pictures/ci.php)" 403
+          # The same for the photos in directions inside buildings.
+          docker exec web sh -c 'echo ok > /data/uploads/directions/ci.txt && echo "<?php echo 1;" > /data/uploads/directions/ci.php'
+          expect "Directions photo on the /data volume" "$(curl -s "$base/uploads/directions/ci.txt")" ok
+          expect "Script in the directions photos folder" "$(status $base/uploads/directions/ci.php)" 403
+          directions=$(status "$base/admin_office_directions.php")
+          [ "$directions" = 401 ] || [ "$directions" = 403 ] || fail "Directions editor without signing in: expected 401 or 403, got $directions"
 
           # The published password "password" no longer works; the chosen one asks for a new password.
           jar=$(mktemp)
@@ -111,6 +131,110 @@ jobs:
           # is at the end of a line: output cut off by the stop can share its line.
           logs=$(docker logs web 2>&1)
           grep -qE 'Database is up to date\.$' <<< "$logs" || fail "After a restart, the database setup did not report up to date"
+
+      # The visitor app's main requests, on the same MariaDB as Railway. MariaDB 11.4 once
+      # refused every appointment request ("Illegal mix of collations") while MariaDB 10.4 on
+      # the laptops accepted them; this step catches that kind of difference before a deploy.
+      - name: Visitor app requests
+        run: |
+          set -eu
+          api=http://localhost:8080/phone_tracker/api/v1
+          fail() { echo "::error title=Server check failed::$1"; exit 1; }
+          contains() { grep -qiF -- "$2" <<< "$1"; }
+          send() { curl -s -H "Content-Type: application/json" -H "User-Agent: ISATU-Visitor-Android/ci" "$@"; }
+
+          # A new account exists only once the code emailed to it is entered. Email isn't set up
+          # here, so the code waits in the queue, where this check reads it.
+          code_for() { docker exec db mariadb -uisatu -pisatu-secret app -N -e "SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, '\$.code')) FROM outbound_emails WHERE recipient_email = '$1' AND template_key = 'account_code' ORDER BY id DESC LIMIT 1"; }
+          signup() {
+            local reply request code
+            reply=$(send -d "$2" "$api/auth/register.php")
+            # The number in data, not the text request_id in meta.
+            request=$(sed -n 's/.*"request_id":\([0-9][0-9]*\).*/\1/p' <<< "$reply")
+            # No fail here: this runs inside $(...), so the caller reports what came back.
+            [ -n "$request" ] || { echo "Sign-up did not send a code to $1: ${reply:0:300}"; return 0; }
+            code=$(code_for "$1")
+            [ -n "$code" ] || { echo "No code was queued for $1"; return 0; }
+            send -d "{\"request_id\":$request,\"code\":\"$code\",\"installation_id\":\"ci-phone\",\"device_name\":\"CI phone\"}" "$api/auth/confirm_signup.php"
+          }
+
+          email="ci-visitor-$(date +%s)@example.test"
+          reply=$(signup "$email" "{\"account_type\":\"visitor\",\"email\":\"$email\",\"full_name\":\"CI Visitor\",\"contact_number\":\"09170000000\",\"password\":\"Ci-Visitor-Pass-1\",\"tracking_consent\":true,\"consent_version\":\"terms-privacy-v4\"}")
+          contains "$reply" '"role":"visitor"' || fail "Confirming the visitor's code failed: ${reply:0:300}"
+          reply=$(send -d "{\"identifier\":\"$email\",\"password\":\"Ci-Visitor-Pass-1\",\"installation_id\":\"ci-phone\",\"device_name\":\"CI phone\"}" "$api/auth/login.php")
+          token=$(sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p' <<< "$reply")
+          [ -n "$token" ] || fail "Visitor sign-in failed: ${reply:0:300}"
+
+          # Forgot password, as the app does it. data must be an object: PHP sends an empty one as [],
+          # which no app could read. The emailed 6-digit code refuses a wrong guess, then sets the password.
+          reply=$(send -d "{\"email\":\"$email\"}" "$api/auth/request_password_reset.php")
+          contains "$reply" '"data":{' || fail "The password reset reply's data is not an object: ${reply:0:300}"
+          reset=$(docker exec db mariadb -uisatu -pisatu-secret app -N -e "SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, '\$.code')) FROM outbound_emails WHERE recipient_email = '$email' AND template_key = 'password_reset' ORDER BY id DESC LIMIT 1")
+          [[ "$reset" =~ ^[0-9]{6}$ ]] || fail "No 6-digit reset code was queued for $email: $reset"
+          wrong=$(printf '%06d' $(( (10#$reset + 1) % 1000000 )))
+          reply=$(send -d "{\"email\":\"$email\",\"token\":\"$wrong\",\"new_password\":\"Ci-Visitor-Pass-2\"}" "$api/auth/reset_password.php")
+          contains "$reply" '4 tries left' || fail "A wrong reset code was not refused: ${reply:0:300}"
+          reply=$(send -d "{\"email\":\"$email\",\"token\":\"$reset\",\"new_password\":\"Ci-Visitor-Pass-2\"}" "$api/auth/reset_password.php")
+          contains "$reply" '"success":true' || fail "The emailed reset code did not set a new password: ${reply:0:300}"
+          # A new password signs out every device, so sign in again with it.
+          reply=$(send -d "{\"identifier\":\"$email\",\"password\":\"Ci-Visitor-Pass-2\",\"installation_id\":\"ci-phone\",\"device_name\":\"CI phone\"}" "$api/auth/login.php")
+          token=$(sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p' <<< "$reply")
+          [ -n "$token" ] || fail "Signing in with the new password failed: ${reply:0:300}"
+
+          # Only visitors sign up (the app sends no account_type from 0.11.0). An older app that
+          # still asks for an ISATU student account is told to update, and a school email signs up
+          # as a visitor like any other.
+          reply=$(send -d "{\"account_type\":\"student\",\"email\":\"ci-student@students.isatu.edu.ph\",\"full_name\":\"CI Student\",\"password\":\"Ci-Student-Pass-1\",\"consent_version\":\"terms-privacy-v4\",\"student_number\":\"2023-0001-A\",\"course_name\":\"BSIT\",\"year_level\":3,\"section\":\"B\"}" "$api/auth/register.php")
+          contains "$reply" 'Only visitor accounts' || fail "A student sign-up from an old app was not refused: ${reply:0:300}"
+          school="ci-school-$(date +%s)@students.isatu.edu.ph"
+          reply=$(signup "$school" "{\"email\":\"$school\",\"full_name\":\"CI School Visitor\",\"password\":\"Ci-Visitor-Pass-1\",\"tracking_consent\":true,\"consent_version\":\"terms-privacy-v4\"}")
+          contains "$reply" '"role":"visitor"' || fail "A school email could not sign up as a visitor: ${reply:0:300}"
+
+          # 10:00 on the next weekday, Philippine time, when the offices take appointments.
+          day=1
+          while [ "$(TZ=Asia/Manila date -d "+$day day" +%u)" -gt 5 ]; do day=$((day + 1)); done
+          start=$(TZ=Asia/Manila date -d "+$day day" '+%Y-%m-%d 10:00:00')
+          for type in appointment walk_in; do
+            reply=$(send -H "Authorization: Bearer $token" -d "{\"visit_type\":\"$type\",\"office_code\":\"IT\",\"purpose\":\"Inquiry\",\"subject\":\"Server check\",\"scheduled_start_at\":\"$start\",\"device_name\":\"CI phone\",\"location_consent\":{\"granted\":true,\"version\":\"location-v1\"}}" "$api/appointments.php")
+            contains "$reply" '"success":true' || fail "Creating a $type from the app failed: ${reply:0:300}"
+          done
+          id=$(sed -n 's/.*"appointment":{"id":\([0-9]*\).*/\1/p' <<< "$reply")
+          [ -n "$id" ] || fail "The walk-in reply had no appointment id: ${reply:0:300}"
+          reply=$(send -H "Authorization: Bearer $token" "$api/campus_map.php?appointment_id=$id")
+          contains "$reply" '"walking_routes"' || fail "campus_map.php did not answer with walking_routes: ${reply:0:300}"
+
+
+          # Visitors only see an office that has someone to answer it.
+          docker exec db mariadb -uisatu -pisatu-secret app -e "INSERT INTO app_users (username, password_hash, display_name, role, office_code) VALUES ('ci_tech_support', 'not-a-password', 'CI Tech Support', 'offices', 'TECH_SUPPORT')"
+
+          # An office with a recorded route but no pin (Tech Support on the starting map) is
+          # found where its route ends, and the route's named start is offered as a gate.
+          docker exec db mariadb -uisatu -pisatu-secret app -e "INSERT INTO campus_routes (office_code, name, start_label, method, points_json, point_count, distance_meters) VALUES ('TECH_SUPPORT', 'Back Gate to Tech Support', 'Back Gate', 'drawn', '[[10.71700,122.55500],[10.71740,122.55530]]', 2, 55)"
+          reply=$(send -H "Authorization: Bearer $token" -d "{\"visit_type\":\"walk_in\",\"office_code\":\"TECH_SUPPORT\",\"purpose\":\"Inquiry\",\"subject\":\"Server check\",\"device_name\":\"CI phone\",\"location_consent\":{\"granted\":true,\"version\":\"location-v1\"}}" "$api/appointments.php")
+          contains "$reply" '"success":true' || fail "Creating a walk-in to Tech Support failed: ${reply:0:300}"
+          id=$(sed -n 's/.*"appointment":{"id":\([0-9]*\).*/\1/p' <<< "$reply")
+          reply=$(send -H "Authorization: Bearer $token" "$api/campus_map.php?appointment_id=$id")
+          contains "$reply" '"location_source":"route"' || fail "An office with a route but no pin got no destination: ${reply:0:400}"
+          contains "$reply" '"name":"Back Gate"' || fail "The route's named start was not offered as a gate: ${reply:0:400}"
+
+          # Directions an administrator wrote reach the visitor with the map.
+          contains "$reply" '"direction_steps":[]' || fail "campus_map.php did not answer with direction_steps: ${reply:0:400}"
+          docker exec db mariadb -uisatu -pisatu-secret app -e "INSERT INTO office_directions (office_code, building, floor, room, visitor_message) VALUES ('TECH_SUPPORT', 'CCI Building', '2nd floor', 'Room 201', 'Take the stairs near the main door.'); INSERT INTO office_direction_steps (office_code, sort_order, step_text) VALUES ('TECH_SUPPORT', 1, 'Take the stairs on your left.')"
+          reply=$(send -H "Authorization: Bearer $token" "$api/campus_map.php?appointment_id=$id")
+          contains "$reply" '"building":"CCI Building"' || fail "The building did not reach the visitor: ${reply:0:400}"
+          contains "$reply" '"text":"Take the stairs on your left."' || fail "The steps did not reach the visitor: ${reply:0:400}"
+          # "I can't find it" needs the guard's check-in first.
+          reply=$(send -H "Authorization: Bearer $token" -d "{\"appointment_id\":$id,\"step_number\":1}" "$api/direction_help.php")
+          contains "$reply" 'once the guard has checked you in' || fail "Asking for help before check-in was not refused: ${reply:0:300}"
+          docker exec db mariadb -uisatu -pisatu-secret app -e "UPDATE appointments SET status = 'checked_in', checked_in_at = NOW() WHERE id = $id"
+          reply=$(send -H "Authorization: Bearer $token" -d "{\"appointment_id\":$id,\"step_number\":1}" "$api/direction_help.php")
+          contains "$reply" '"office_told":' || fail "Asking for help after check-in failed: ${reply:0:300}"
+          contains "$reply" '"already_told":false' || fail "Asking for help after check-in failed: ${reply:0:300}"
+          reply=$(send -H "Authorization: Bearer $token" -d "{\"appointment_id\":$id,\"step_number\":1}" "$api/direction_help.php")
+          contains "$reply" '"success":true' || fail "Asking for help twice failed: ${reply:0:300}"
+          # The tap that counts as arrived.
+          reply=$(send -H "Authorization: Bearer $token" -d "{\"appointment_id\":$id,\"method\":\"visitor\"}" "$api/arrival.php")
+          contains "$reply" '"arrival_method":"visitor"' || fail "The visitor's arrival tap was not recorded: ${reply:0:300}"
 
       - name: Startup log
         if: always()

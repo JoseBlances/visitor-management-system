@@ -296,6 +296,7 @@
         const host = el("campusRouteCoverage");
         host.replaceChildren();
         const names = CampusSetup.officeNames();
+        const pins = CampusSetup.officePins();
         const codes = Object.keys(names).filter(function (code) { return names[code].indexOf("(archived)") === -1; });
         const covered = codes.filter(function (code) {
             return routes.list.some(function (route) { return route.office_code === code; });
@@ -307,9 +308,14 @@
         codes.forEach(function (code) {
             const chip = document.createElement("span");
             const has = covered.indexOf(code) !== -1;
-            chip.className = "campus-route-chip" + (has ? " has-route" : "");
-            chip.textContent = (has ? "✓ " : "") + names[code];
-            if (has) {
+            // A route without a pin still guides visitors (to where the route ends), but the
+            // door may be elsewhere: shown as a warning.
+            const noPin = has && !pins[code];
+            chip.className = "campus-route-chip" + (has ? " has-route" : "") + (noPin ? " is-warning" : "");
+            chip.textContent = (noPin ? "⚠ " : (has ? "✓ " : "")) + names[code] + (noPin ? " · no pin" : "");
+            if (noPin) {
+                chip.title = "Visitors are guided to where its route ends. Place the pin at the door in the Offices tab.";
+            } else if (has) {
                 chip.style.borderColor = officeColor(code);
             }
             chips.appendChild(chip);
@@ -557,9 +563,16 @@
         });
     }
 
-    function cancelRecording(skipConfirm) {
+    // Asks only when there is something to lose; without a question it finishes straight away.
+    async function cancelRecording(skipConfirm) {
         if (!skipConfirm && routes.recorder && routes.recorder.status().points.length > 1
-            && !window.confirm("Discard this recording?")) {
+            && !(await AppDialog.confirm({
+                title: "Discard this recording?",
+                message: "The path recorded so far will be lost.",
+                confirmLabel: "Discard recording",
+                cancelLabel: "Keep recording",
+                danger: true,
+            }))) {
             return;
         }
         if (routes.recorder) {
@@ -698,9 +711,15 @@
         });
     }
 
-    function cancelDrawing() {
+    async function cancelDrawing() {
         if (routes.drawing && !routes.drawing.editingId && routes.drawing.points.length > 1
-            && !window.confirm("Discard this drawing?")) {
+            && !(await AppDialog.confirm({
+                title: "Discard this drawing?",
+                message: "The points you placed will be lost.",
+                confirmLabel: "Discard drawing",
+                cancelLabel: "Keep drawing",
+                danger: true,
+            }))) {
             return;
         }
         routes.drawing = null;
@@ -731,7 +750,7 @@
                 warnings.push("Ends " + Math.round(fromPin) + " m from the " + name + " pin. If the pin is at the right door, the route stops early; if not, move the pin.");
             }
         } else {
-            warnings.push(name + " has no pin yet. Tick the box below to place it where this route ends, or place it in the Offices tab.");
+            warnings.push(name + " has no pin yet: saving this route places it where the route ends. If the door is elsewhere, move the pin later in the Offices tab.");
         }
         const gates = CampusSetup.gates();
         if (!gates.length) {
@@ -784,16 +803,17 @@
         });
         warningList.hidden = !warningList.children.length;
 
-        // A walked route can place the department pin where the admin stopped.
+        // Without a pin, saving places one where the route ends (saveReview). A walked route
+        // can also move an existing pin to where the admin stopped.
         const pin = CampusSetup.officePins()[draft.officeCode];
         const end = points[points.length - 1];
         const endAccuracy = draft.endAccuracy;
-        const canMovePin = draft.method === "walked" && !draft.manual && endAccuracy !== null && endAccuracy <= 12;
+        const canMovePin = Boolean(pin) && draft.method === "walked" && !draft.manual && endAccuracy !== null && endAccuracy <= 12;
         const pinWrap = el("campusReviewPinWrap");
         pinWrap.hidden = !canMovePin;
         if (canMovePin) {
-            const far = !pin || CampusGps.distanceMeters(end, [pin.latitude, pin.longitude]) > 5;
-            el("campusReviewPinText").textContent = (pin ? "Move the " : "Place the ") + officeName(draft.officeCode)
+            const far = CampusGps.distanceMeters(end, [pin.latitude, pin.longitude]) > 5;
+            el("campusReviewPinText").textContent = "Move the " + officeName(draft.officeCode)
                 + " pin to where you stopped (GPS ±" + Math.round(endAccuracy) + " m)";
             if (draft.movePin === undefined) {
                 // A pin taken standing still (several GPS readings averaged) beats one reading at the end of a walk.
@@ -853,8 +873,11 @@
         routes.draft = null;
     }
 
-    function discardReview() {
-        if (!window.confirm(routes.draft && routes.draft.editingId ? "Discard these changes?" : "Discard this route?")) {
+    async function discardReview() {
+        const editing = Boolean(routes.draft && routes.draft.editingId);
+        if (!(await AppDialog.confirm(editing
+            ? { title: "Discard these changes?", message: "The route stays as it was.", confirmLabel: "Discard changes", cancelLabel: "Keep editing", danger: true }
+            : { title: "Discard this route?", message: "It hasn't been saved and will be lost.", confirmLabel: "Discard route", cancelLabel: "Keep route", danger: true }))) {
             return;
         }
         routes.draft = null;
@@ -912,15 +935,28 @@
             showView("idle");
             renderAll();
             let text = "Saved \"" + saved.name + "\" (" + formatDistance(saved.distance_meters) + ").";
-            if (movePin) {
-                CampusSetup.setOfficePin(saved.office_code, points[points.length - 1], draft.endAccuracy);
-                const pinSaved = await CampusSetup.save();
-                text += pinSaved
-                    ? " The " + officeName(saved.office_code) + " pin now sits where you stopped."
-                    : " The pin was moved but not saved; see the message above and press Save campus map.";
-                if (!pinSaved) {
+            // A department needs a pin as the visitor's destination: one without a pin gets it
+            // where this route ends, the door the admin walked to.
+            const hadPin = Boolean(CampusSetup.officePins()[saved.office_code]);
+            const routeEnd = points[points.length - 1];
+            if ((!hadPin || movePin) && !CampusSetup.isInsideBoundary(routeEnd)) {
+                // A route may end a little past the boundary line; a pin must be inside it.
+                message(text + " This route ends outside the campus boundary, so the " + officeName(saved.office_code)
+                    + " pin was " + (hadPin ? "not moved" : "not placed") + ". Place it at the door inside the boundary in the"
+                    + " Offices tab, or extend the boundary.", true);
+                return;
+            }
+            if (!hadPin || movePin) {
+                const walked = draft.method === "walked" && !draft.manual;
+                CampusSetup.setOfficePin(saved.office_code, routeEnd, walked ? draft.endAccuracy : null);
+                // On failure the campus map's own message (for example, outside the boundary) stays.
+                if (!(await CampusSetup.save())) {
                     return;
                 }
+                text += hadPin
+                    ? " The " + officeName(saved.office_code) + " pin now sits where you stopped."
+                    : " " + officeName(saved.office_code) + " had no pin, so it was placed where this route ends;"
+                        + " if the door is elsewhere, move it in the Offices tab.";
             }
             message(text, false);
         } catch (error) {
@@ -931,7 +967,12 @@
     }
 
     async function deleteRoute(route) {
-        if (!window.confirm("Delete the route \"" + route.name + "\"? This cannot be undone.")) {
+        if (!(await AppDialog.confirm({
+            title: "Delete the route “" + route.name + "”?",
+            message: "This cannot be undone.",
+            confirmLabel: "Delete route",
+            danger: true,
+        }))) {
             return;
         }
         try {
@@ -1167,5 +1208,11 @@
             event.returnValue = "";
         }
     });
+    /** What the rest of the Campus Map editor may ask about routes (campus_setup.js). */
+    window.CampusRoutes = {
+        countFor: function (officeCode) {
+            return routes.list.filter(function (route) { return route.office_code === officeCode; }).length;
+        },
+    };
     CampusSetup.whenReady(setup);
 })();

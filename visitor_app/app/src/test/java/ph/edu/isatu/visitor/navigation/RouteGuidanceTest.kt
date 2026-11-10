@@ -65,12 +65,23 @@ class RouteGuidanceTest {
         assertEquals(listOf("35 meters to IT Department."), engine.walk(60.0, 6.0, 50, heading = 90.0).said())
         assertEquals(listOf("IT Department is just ahead."), engine.walk(60.0, 18.0, 58, heading = 90.0).said())
 
-        // Arrival is still judged at the pin itself, from accurate readings in a row.
-        engine.walk(60.0, 39.0, 70, heading = 90.0)
-        engine.walk(60.0, 39.2, 71, heading = 90.0)
-        val arrived = engine.walk(60.0, 39.5, 72, heading = 90.0)
+        // From here on GPS only asks: only the visitor's tap counts as arrived.
+        repeat(5) { second ->
+            val atThePin = engine.walk(60.0, 39.5, 70L + second, heading = 90.0)
+            assertEquals(GuidancePhase.AT_BUILDING, atThePin.snapshot.phase)
+            assertNull(atThePin.arrival)
+        }
+    }
+
+    @Test
+    fun aGateIsStillReachedByGpsAlone() {
+        val gatePin = at(60.0, 40.0)
+        val mainGate = GuidanceTarget("gate:Main Gate", "Main Gate", TargetKind.GATE, gatePin)
+        val engine = GuidanceEngine()
+        engine.walk(60.0, 39.0, 70, heading = 90.0, target = mainGate)
+        engine.walk(60.0, 39.2, 71, heading = 90.0, target = mainGate)
+        val arrived = engine.walk(60.0, 39.5, 72, heading = 90.0, target = mainGate)
         assertEquals(GuidancePhase.ARRIVED, arrived.snapshot.phase)
-        assertEquals(listOf("You have arrived at IT Department."), arrived.said())
         assertNotNull(arrived.arrival)
     }
 
@@ -127,6 +138,22 @@ class RouteGuidanceTest {
         val update = GuidanceEngine().update(fix, 0.0, itOffice, null, DistanceUnit.METERS, ArrivalRule(), elsewhere)
         assertNull(update.snapshot.route)
         assertEquals(listOf("Heading to IT Department. It's 70 meters away, slightly to your right."), update.said())
+    }
+
+    @Test
+    fun onTheWalkwayDirectionsFollowTheLineNotGpsWander() {
+        // GPS places the visitor 5 m beside the walkway, 20 m up it; they count as on it.
+        val fix = LocationFix(at(20.0, 5.0), 5.0, 0)
+        val path = planner.plan(fix.point, office, targetOffice = "IT")!!.onWalkway()
+        val update = GuidanceEngine().update(fix, 0.0, itOffice, null, DistanceUnit.METERS, ArrivalRule(3.0, 8.0), path)
+        val bearing = update.snapshot.bearingDegrees!!
+        assertEquals("the arrow points up the walkway, not 40° across it", 0.0, GeoMath.signedDifference(bearing, 0.0), 1.0)
+        val route = update.snapshot.route!!
+        assertEquals(0.0, route.offPathMeters, 0.0)
+        assertEquals(80.0, route.remainingMeters, 0.5)
+        assertEquals(40.0, route.nextTurnMeters!!, 1.0)
+        assertEquals(listOf("Heading to IT Department. Follow the blue line, 80 meters to walk."), update.said())
+        assertEquals("Turn right in 40 m", routeInstruction(route, DistanceUnit.METERS))
     }
 
     @Test

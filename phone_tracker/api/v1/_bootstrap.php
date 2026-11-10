@@ -54,15 +54,34 @@ function api_json(array $payload, int $status = 200): never
 
 function api_success(array $data = [], int $status = 200, string $message = ""): never
 {
-    $payload = ["success" => true, "data" => $data];
+    // The app reads data as an object, but PHP sends an empty array as [], not {}. That made
+    // "Forgot password?" fail in every app on the live server, where its reply has nothing in it.
+    $payload = ["success" => true, "data" => $data === [] ? new stdClass() : $data];
     if ($message !== "") {
         $payload["message"] = $message;
     }
     api_json($payload, $status);
 }
 
-function api_fail(string $message, int $status = 400, array $errors = []): never
+/**
+ * Ends the request with an error. Pass the [cause] of an unexpected failure: the app only
+ * sees [message], and the real reason goes to the server log (Railway's log) with the
+ * request id the app also receives.
+ */
+function api_fail(string $message, int $status = 400, array $errors = [], ?Throwable $cause = null): never
 {
+    if ($cause !== null) {
+        error_log(sprintf(
+            "[api %s] %s %s failed: %s: %s at %s:%d",
+            $GLOBALS["mobile_api_request_id"] ?? "-",
+            $_SERVER["REQUEST_METHOD"] ?? "",
+            strtok((string) ($_SERVER["REQUEST_URI"] ?? ""), "?") ?: "",
+            get_class($cause),
+            $cause->getMessage(),
+            basename($cause->getFile()),
+            $cause->getLine()
+        ));
+    }
     $payload = ["success" => false, "message" => $message];
     if ($errors) {
         $payload["errors"] = $errors;
@@ -165,6 +184,7 @@ function api_require_visitor(): array
     return $row;
 }
 
+
 function api_issue_access_token(mysqli $conn, int $userId, string $installationId, string $deviceName): array
 {
     $raw = rtrim(strtr(base64_encode(random_bytes(48)), "+/", "-_"), "=");
@@ -257,44 +277,6 @@ function api_password_validation_error(string $password): string
         return "Password must include at least one letter and one number";
     }
     return "";
-}
-
-function api_create_account_action_token(
-    mysqli $conn,
-    int $userId,
-    string $email,
-    string $purpose,
-    int $validMinutes
-): string {
-    $raw = bin2hex(random_bytes(32));
-    $hash = hash("sha256", $raw);
-    $expires = (new DateTimeImmutable("now"))->modify("+{$validMinutes} minutes")->format("Y-m-d H:i:s");
-    $invalidate = $conn->prepare(
-        "UPDATE account_action_tokens SET consumed_at = NOW()
-         WHERE user_id = ? AND purpose = ? AND consumed_at IS NULL"
-    );
-    $invalidate->bind_param("is", $userId, $purpose);
-    $invalidate->execute();
-    $invalidate->close();
-    $insert = $conn->prepare(
-        "INSERT INTO account_action_tokens (user_id, purpose, token_hash, expires_at, requested_ip)
-         VALUES (?, ?, ?, ?, ?)"
-    );
-    $ip = api_client_ip();
-    $insert->bind_param("issss", $userId, $purpose, $hash, $expires, $ip);
-    $insert->execute();
-    $insert->close();
-    $template = $purpose === "verify_email" ? "verify_email" : "password_reset";
-    $subject = $purpose === "verify_email" ? "Verify your visitor account" : "Reset your visitor account password";
-    $payload = json_encode(["token" => $raw, "expires_at" => $expires], JSON_UNESCAPED_SLASHES);
-    $emailStmt = $conn->prepare(
-        "INSERT INTO outbound_emails (user_id, recipient_email, template_key, subject, payload_json)
-         VALUES (?, ?, ?, ?, ?)"
-    );
-    $emailStmt->bind_param("issss", $userId, $email, $template, $subject, $payload);
-    $emailStmt->execute();
-    $emailStmt->close();
-    return $raw;
 }
 
 function api_user_payload(array $user): array

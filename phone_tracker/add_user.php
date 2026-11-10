@@ -28,7 +28,8 @@ $contactNumber = trim((string) ($input["contact_number"] ?? ""));
 $role = isset($input["role"]) ? (string) $input["role"] : "";
 $officeCode = isset($input["office_code"]) ? strtoupper(trim((string) $input["office_code"])) : "";
 
-$allowed = ["security", "visitor", "offices", "admin"];
+// Visitors sign up in the app themselves, with a code sent to their email.
+$allowed = ["security", "offices", "admin"];
 if ($username === "" || !in_array($role, $allowed, true)) {
     echo json_encode(["success" => false, "message" => "Username and a valid role are required"]);
     exit;
@@ -51,7 +52,7 @@ if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9._@-]{2,63}$/', $username)) {
 if ($role === "offices") {
     $offices = appointment_office_active_map();
     if (!isset($offices[$officeCode])) {
-        echo json_encode(["success" => false, "message" => "Select an active department for this person"]);
+        echo json_encode(["success" => false, "message" => "Select an active office for this person"]);
         exit;
     }
 } else {

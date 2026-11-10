@@ -179,7 +179,8 @@ function mobile_create_appointment(mysqli $conn, array $user, array $input): arr
         ? $input["location_consent"] : [];
     $consentGranted = !empty($consentInput["granted"]);
     $consentVersion = trim((string) ($consentInput["version"] ?? ""));
-    $offices = appointment_office_active_map();
+    // Only offices with someone to answer (appointment_office_bookable_map()).
+    $offices = appointment_office_bookable_map();
     $errors = [];
     if (!isset($offices[$officeCode])) {
         $errors["office_code"] = "Select a valid office";
@@ -205,6 +206,13 @@ function mobile_create_appointment(mysqli $conn, array $user, array $input): arr
         throw new DomainException(
             trim((string) ($settings["unavailable_reason"] ?? "")) ?: "This office is not accepting visitors right now"
         );
+    }
+    if ($visitType === "walk_in") {
+        // No walk-in passes during a break, a posted closure, or outside visitor hours.
+        $blocked = office_walk_in_block_reason($conn, $officeCode, $offices[$officeCode], new DateTimeImmutable("now"));
+        if ($blocked !== null) {
+            throw new DomainException($blocked);
+        }
     }
     $end = $visitType === "appointment" && $endText !== "" ? mobile_parse_datetime($endText) : null;
     if ($visitType === "walk_in") {

@@ -1,12 +1,16 @@
 package ph.edu.isatu.visitor.ui
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
+import com.google.gson.JsonParseException
+import com.google.gson.stream.MalformedJsonException
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -28,18 +32,21 @@ import ph.edu.isatu.visitor.data.CreateAppointmentRequest
 import ph.edu.isatu.visitor.data.LocationConsentRequest
 import ph.edu.isatu.visitor.data.NotificationDto
 import ph.edu.isatu.visitor.data.OfficeDto
+import ph.edu.isatu.visitor.data.RegisterRequest
+import ph.edu.isatu.visitor.data.SignupCodeData
 import ph.edu.isatu.visitor.data.TrackingData
 import ph.edu.isatu.visitor.data.UserDto
 import ph.edu.isatu.visitor.data.VisitDto
 import ph.edu.isatu.visitor.data.VisitStopRequest
 import ph.edu.isatu.visitor.data.VisitorRepository
 
-/** Details carried into the booking form when the visitor rebooks a declined proposal. */
+/** Details carried into the booking form, so a visitor who rebooks has nothing to type again. */
 data class BookingPrefill(
     val officeCode: String,
     val purpose: String,
     val subject: String,
     val details: String,
+    val visitType: String = "appointment",
 )
 
 data class VisitorUiState(
@@ -47,6 +54,8 @@ data class VisitorUiState(
     val initializing: Boolean = true,
     val busy: Boolean = false,
     val user: UserDto? = null,
+    /** This account hasn't agreed to the current Terms and Privacy Notice on this phone. */
+    val noticeAgreementNeeded: Boolean = false,
     val offices: List<OfficeDto> = emptyList(),
     val appointments: List<AppointmentDto> = emptyList(),
     val notifications: List<NotificationDto> = emptyList(),
@@ -60,11 +69,36 @@ data class VisitorUiState(
     val tracking: TrackingData? = null,
     /** The campus map for the visit on screen (boundary, gates, destination). */
     val campusMap: CampusMapData? = null,
+    /** Set while the person types the code from their email. */
+    val signup: SignupProgress? = null,
+    /** "Forgot password?" sent a code, which is waiting to be entered with a new password. */
+    val passwordReset: PasswordResetProgress? = null,
+    /** A new password was just saved: Log in shows, with this email filled in. */
+    val passwordChanged: PasswordChanged? = null,
     val error: String? = null,
     val message: String? = null,
 )
 
 fun stopAvailabilityKey(officeCode: String, date: String): String = "$officeCode|$date"
+
+/** A sign-up waiting for the 6-digit code that was emailed to [email]. */
+data class SignupProgress(
+    val requestId: Long,
+    val email: String,
+    /** When another code may be asked for (System.currentTimeMillis()). */
+    val resendAt: Long,
+)
+
+data class PasswordResetProgress(
+    val email: String,
+    /** How long the code works. */
+    val minutes: Int,
+    /** When another code may be asked for (System.currentTimeMillis()). */
+    val resendAt: Long,
+)
+
+/** [at] tells one saved password from the next, for the same email. */
+data class PasswordChanged(val email: String, val at: Long)
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: VisitorRepository = (application as VisitorApplication).repository
@@ -85,30 +119,120 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _welcome = MutableStateFlow<Welcome?>(null)
+
+    /** Set when an account has just been made, until its welcome has played. */
+    val welcome: StateFlow<Welcome?> = _welcome.asStateFlow()
+
+    fun welcomeShown() {
+        _welcome.value = null
+    }
+
+    /** The email last signed in with on this phone, filled in on the sign-in screen. */
+    val rememberedEmail: String get() = repository.lastEmail.orEmpty()
+
+    /** Signed in right now, before the screen has caught up. */
+    val signedInNow: Boolean get() = repository.signedIn.value
+
+    /** What the opening animation says when the torch lights. */
+    fun openingGreeting(): String =
+        greetingFor(repository.signedIn.value, _state.value.user?.fullName ?: repository.savedName)
+
+    fun agreeToNotice() {
+        val user = _state.value.user ?: return
+        repository.saveNoticeAgreement(user.id)
+        _state.update { it.copy(noticeAgreementNeeded = false) }
+    }
+
+    /** Logging in plays the seal once more, with "Welcome back" and their first name. */
     fun login(email: String, password: String) = launchTask {
-        repository.login(email.trim(), password)
+        // Ready before the app signs in, so the animation covers the change from its first frame.
+        repository.login(email.trim(), password) { user ->
+            _welcome.value = Welcome(firstNameOf(user.fullName), returning = true)
+        }
     }
 
-    fun register(email: String, name: String, contact: String, password: String) = launchTask {
-        repository.register(email.trim(), name.trim(), contact.trim(), password)
-        repository.login(email.trim(), password)
+    /** A new visitor account: any email, and they agree to share their location on campus. */
+    fun registerVisitor(email: String, name: String, contact: String, password: String) = launchTask {
+        val sent = repository.register(
+            RegisterRequest(
+                email = email.trim(),
+                fullName = name.trim(),
+                contactNumber = contact.trim(),
+                password = password,
+                trackingConsent = true,
+                consentVersion = BuildConfig.CONSENT_VERSION,
+            ),
+        )
+        codeSent(sent)
     }
 
-    fun requestPasswordReset(email: String) = launchTask {
-        val result = repository.requestPasswordReset(email.trim())
-        val localToken = result.developmentResetToken
+    private fun codeSent(sent: SignupCodeData) {
         _state.update {
             it.copy(
-                message = localToken?.let { token -> "Local test reset token: $token" }
-                    ?: "If the account exists, reset instructions were sent.",
+                signup = SignupProgress(
+                    requestId = sent.requestId,
+                    email = sent.email,
+                    resendAt = System.currentTimeMillis() + sent.resendAfterSeconds * 1000L,
+                ),
+                // A server on a developer's computer sends the code back, so it can be tried without email.
+                message = sent.developmentCode?.let { code -> "Local test code: $code" },
+                error = null,
             )
         }
     }
 
-    fun resetPassword(email: String, token: String, password: String) = launchTask {
-        repository.resetPassword(email.trim(), token.trim(), password)
-        _state.update { it.copy(message = "Password updated. Sign in with your new password.") }
+    /** The code from the email: the account is made and signed in, and the welcome plays once. */
+    fun confirmSignup(code: String) = launchTask {
+        val signup = _state.value.signup ?: return@launchTask
+        // Ready before the app signs in, so the welcome covers the change from its first frame.
+        repository.confirmSignup(signup.requestId, code.trim()) { user ->
+            _welcome.value = Welcome(firstNameOf(user.fullName))
+        }
+        _state.update { it.copy(signup = null, message = null) }
     }
+
+    fun resendSignupCode() = launchTask {
+        val signup = _state.value.signup ?: return@launchTask
+        val sent = repository.resendCode(signup.requestId)
+        codeSent(sent)
+        _state.update { it.copy(message = it.message ?: "We sent a new code. The old one no longer works.") }
+    }
+
+    fun cancelSignup() = _state.update { it.copy(signup = null, error = null, message = null) }
+
+    /** "Forgot password?": emails a 6-digit code. Asked again, it sends a new one and the old one stops working. */
+    fun requestPasswordReset(email: String) = launchTask {
+        val address = email.trim()
+        val sent = repository.requestPasswordReset(address)
+        val again = _state.value.passwordReset?.email.equals(address, ignoreCase = true)
+        _state.update {
+            it.copy(
+                passwordReset = PasswordResetProgress(
+                    email = address,
+                    minutes = sent.codeMinutes,
+                    resendAt = System.currentTimeMillis() + sent.resendAfterSeconds * 1000L,
+                ),
+                message = sent.developmentResetToken?.let { code -> "Local test code: $code" }
+                    ?: if (again) "We sent a new code. The old one no longer works." else null,
+            )
+        }
+    }
+
+    /** The code from the email and a new password. Then Log in, with the email filled in. */
+    fun resetPassword(email: String, code: String, password: String) = launchTask {
+        repository.resetPassword(email.trim(), code.trim(), password)
+        _state.update {
+            it.copy(
+                passwordReset = null,
+                passwordChanged = PasswordChanged(email.trim(), System.currentTimeMillis()),
+                message = "Password changed. Log in with your new password.",
+            )
+        }
+    }
+
+    /** Back to typing the email. */
+    fun cancelPasswordReset() = _state.update { it.copy(passwordReset = null, error = null, message = null) }
 
     fun refreshAll(initial: Boolean = false) {
         viewModelScope.launch {
@@ -128,6 +252,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         initializing = false,
                         busy = false,
                         user = profileData,
+                        noticeAgreementNeeded = !repository.agreedToNotice(profileData.id),
                         offices = officeData,
                         appointments = appointmentData,
                         notifications = notificationData.notifications,
@@ -226,7 +351,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 ?: repository.cachedCampusMap(appointmentId)
                 ?: return@launch
             _state.update { it.copy(campusMap = map) }
+            // Directions must work where the signal doesn't, so their photos are saved now.
+            runCatching { repository.saveDirectionPhotos(map) }
         }
+    }
+
+    /** "I can't find it": tells the office which step the visitor stopped at. */
+    suspend fun askOfficeForHelp(stopAppointmentId: Long, stepNumber: Int?): HelpResult = try {
+        if (repository.requestDirectionHelp(stopAppointmentId, stepNumber).officeTold) HelpResult.TOLD else HelpResult.NO_STAFF
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        HelpResult.FAILED
     }
 
     private val arrivalReports = mutableMapOf<Long, Job>()
@@ -465,15 +601,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** What to tell the person when something fails: the server's words, never a Java error's. */
     private fun readableError(error: Exception): String {
         val apiError = error as? ApiException
-        return apiError?.fieldErrors?.values?.firstOrNull { it.isNotBlank() }
-            ?: apiError?.message
-            ?: error.message
-            ?: "Something went wrong. Check your connection and try again."
+        if (apiError != null) {
+            return apiError.fieldErrors.values.firstOrNull { it.isNotBlank() } ?: apiError.message
+        }
+        Log.w(TAG, "Request failed", error)
+        return when (error) {
+            // A reply the app can't read. MalformedJsonException is an IOException, so it goes first.
+            is JsonParseException, is MalformedJsonException ->
+                "The app couldn't read the server's reply. Try again in a moment."
+            is IOException -> "Can't reach ISATU Visits. Check your internet connection and try again."
+            else -> error.message ?: "Something went wrong. Try again in a moment."
+        }
     }
 
     private companion object {
+        const val TAG = "ISATUVisits"
         const val ARRIVAL_REPORT_ATTEMPTS = 20
         const val ARRIVAL_RETRY_MILLIS = 30_000L
     }

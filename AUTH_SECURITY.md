@@ -18,9 +18,22 @@ for any remaining steps in this order:
 3. **Two-step setup** (`login_two_factor_setup.php`) if the role requires it and it is
    not set up yet. Ends by showing 10 backup codes once.
 
-Only then does the server create the session. The page shows a 5-second sequence (four
-checks of 1.1 s and a 0.6 s finish) while this happens; a wrong password returns to the
-form after about 2 seconds instead.
+Only then does the server create the session, and only then does the page play its logo
+animation ("The sign-in animation" in `login.js`), for about 3.5 seconds before the dashboard
+opens. While the server checks the password, the button reads "Signing in…". Each further
+step, and a wrong password, shows on the form straight away, without the animation.
+
+## New accounts
+
+The server decides every role. Sign-up in the app only ever makes a visitor, the only person who
+uses the app. Office Personnel, Security and Admin accounts are made only by the admin (Add user).
+
+- Every new visitor account confirms its email first: a 6-digit code that works for 10 minutes,
+  once, with 5 tries. Only an HMAC of the code is stored. Nothing exists in `app_users` until the
+  code is entered (`account_requests` holds the sign-up until then).
+- Sign-ups are limited per email and per network.
+
+Details: [PHASE4_MOBILE_API.md](PHASE4_MOBILE_API.md), "Creating an account".
 
 ## Lockout rules
 
@@ -119,6 +132,32 @@ Office Personnel still only see their own office's records. To add a role, add i
 - The last active administrator cannot be suspended or removed.
 - Command line recovery when no admin can sign in: `phone_tracker/tools/auth_recovery.php`
   (`unlock`, `reset-password`, `reset-2fa`). Every action is written to `audit_logs`.
+
+## Removing an account
+
+User Management → **Remove** works for any account, even one with years of visits
+(`delete_user.php`, `account_removal_service.php`). It asks the administrator to confirm it's them
+and does everything in one transaction, so it either all happens or nothing changes.
+
+- **Goes with the account:** sign-in, sessions, phones, app sign-ins, notifications, location
+  sharing, trusted browsers, backup codes, and emails still waiting to be sent.
+- **Stays in the records:** every visit, under the name and email it was booked with; consent
+  records; what staff did (approvals, suggested times, check-ins, pass overrides); the activity log.
+  These rows only stop pointing at the account (`ON DELETE SET NULL`, from
+  `account_removal_migration.sql`). GPS positions stay with their visit until the 90-day cleanup.
+- **Closed first:** a visitor's open requests and visits are cancelled, and the office is told about
+  each one still to come. Their open visits are closed, so a saved picture of the pass no longer
+  works at the gate.
+- **Waits:** a visitor who is inside the campus. The guard ends the visit first (End visit on the
+  Security dashboard), or the administrator removes the account after they leave.
+- Nobody can remove their own account or the last active administrator.
+
+Removing is for accounts that should not exist, like test accounts or people who asked to be
+deleted. To keep someone out, **suspend** the account instead: it signs them out and can be undone,
+while a removed person can sign up again with the same email, as a new account with no history.
+
+`php phone_tracker/tools/account_removal_test.php` checks all of this on the database with throwaway
+accounts that it removes again. The server check on GitHub runs it on every push.
 
 ## Other protections
 

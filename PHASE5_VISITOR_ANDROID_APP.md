@@ -18,13 +18,44 @@ endpoints correctly returned HTTP 401 without a bearer token.
 
 ## Product rules preserved
 
-- Visitor signup exists only in the visitor app, not on the staff login page.
-- Signup requires the visitor tracking consent but does not require a separate email
-  verification code. Email is retained for sign-in and password recovery. Visit
-  decisions, proposed schedules, reminders, and cancellations are delivered through
+- The visitor is the only person who uses the app, and visitor signup exists only in the app.
+  Office Personnel, Security and Admin accounts are made by the admin on the website.
+- Since app 0.8.0, every new account confirms its email with a 6-digit code before it exists
+  (PHASE4_MOBILE_API.md, "Creating an account"). A visitor agrees to share their location during
+  visits. Visit decisions, proposed schedules, reminders, and cancellations are delivered through
   Notifications and Firebase push notifications.
-- Bookable destinations come from the API and remain limited to IT Department,
-  IS Department, CS Department, Dean's Office, and Tech Support.
+- Since app 0.9.0 a visitor signs up on one short page. The email code is typed into boxes
+  (`ui/FormParts.kt`); the password rules are in `ui/SignupRules.kt` and its tests.
+- Since app 0.11.0 (2026-11-10) the app is for visitors only, as the capstone adviser asked: there
+  are no ISATU student accounts and no visits to a single teacher. "Create an account" goes straight
+  to the visitor form, any email address can be used, and the Book tab books offices. Apps 0.8.0 to
+  0.10.x still sign in and book offices, but their student and teacher screens no longer work.
+- The look since 0.9.0: ISATU navy at the top of every screen with a gold edge, white below, and
+  gold for progress and the selected tab. The pieces are in `ui/FormParts.kt` (`NavyTopBar`,
+  `NavyBand`, `GoldEdge`); use them on new screens rather than a white top bar.
+- Since app 0.10.0 the app is called **ISATU Visits** on the phone (the package id stays
+  `ph.edu.isatu.visitor`, so it updates over older copies). The website keeps its name. Log in
+  puts its card in the middle
+  of the screen, between a blurred photo of the ISATU building's front fading into navy, with the
+  logo centred above the card, and a navy wave with the university's name (`BrandedAuthPage` in
+  `ui/AuthScreens.kt`). The photo is blurred beforehand, because Android before 12 can't blur:
+  to change it, replace `res/drawable-nodpi/isatu_campus_front.jpg` with another blurred picture
+  of about 800 × 543. The email last signed in with is remembered on the
+  phone and filled in (never the password); the keyboard's Next goes to the password and Done logs
+  in. Right after an account is made, the opening animation plays once more with "Welcome, (first
+  name)" and "Your visitor account is ready" (`Welcome` in
+  `ui/OpeningTimeline.kt`). Since 0.10.1, logging in plays it too, with "Welcome back, (first
+  name)" on one line, and the opening says "Welcome to ISATU Visits" when nobody is logged in.
+- Since 0.10.2 the Terms and Privacy Notice is Version 4 (`terms-privacy-v4`), effective November
+  15, 2026, with ISATU's answers in place of the highlighted blanks: a parent or guardian agrees for
+  someone under 18; visits, consent and activity records are kept 1 year and an account 1 year
+  without use; the contact is mail@isatu.edu.ph. The server deletes on that schedule every day
+  (`phone_tracker/record_retention_service.php`, checked by `tools/record_retention_test.php`).
+- "Forgot password?" works like signing up since 0.10.0: the email, then the 6-digit code in boxes
+  with the new password (`RecoverForm` in `ui/AuthScreens.kt`), then Log in with the email filled
+  in. Before that, no app version could reset a password on the live server (PHASE4_MOBILE_API.md).
+- Bookable destinations come from the API: the active offices that have Office Personnel to
+  answer them, as one plain list the admin keeps in the Office Directory.
 - Walk-ins receive an immediate pass when the selected office is accepting visitors.
   Appointments can use only availability returned by the selected office.
 - Approval exposes a QR pass; pending requests never receive one.
@@ -34,6 +65,15 @@ endpoints correctly returned HTTP 401 without a bearer token.
 - Tracking consent is accepted during account creation and copied into an auditable
   visit record. Android's required operating-system location permission is requested as
   part of signup; it is separate from legal consent and does not start collection.
+- Since app 0.9.0 a visitor's signup has one required checkbox, which agrees to the Terms and
+  Privacy Notice (`ui/TermsNotice.kt`, with a link to read it) and names location sharing in its
+  words. `CONSENT_VERSION` in `app/build.gradle.kts` names
+  the notice's version and goes to the server with signup and each visit's consent. An account
+  that hasn't agreed to this version on this phone sees the notice once before the app opens,
+  and can agree or sign out. That agreement is saved on the phone; the server first sees it
+  with the account's next visit. The notice quotes server settings (listed at the top of
+  `TermsNotice.kt`), so update it when they change. Its highlighted blanks still need ISATU's
+  answers before real visitors use it.
 - A foreground notification remains visible while tracking. Offline points stay on the
   phone until the API accepts them.
 - Android 13 and newer users receive an in-app explanation and button for enabling

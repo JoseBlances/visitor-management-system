@@ -1,14 +1,20 @@
 package ph.edu.isatu.visitor.ui
 
-import android.app.Activity
+import android.graphics.Color as AndroidColor
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -17,7 +23,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
-import androidx.core.view.WindowCompat
 import ph.edu.isatu.visitor.R
 
 val IsatuBlue = Color(0xFF0757B9)
@@ -31,6 +36,8 @@ val MutedInk = Color(0xFF64748B)
 val BorderSoft = Color(0xFFDCE3ED)
 val BlueSurface = Color(0xFFEAF2FF)
 val YellowSurface = Color(0xFFFFF7D6)
+/** Small words on ISATU navy. */
+val OnNavyMuted = Color(0xFFC9D8F2)
 
 private val LightColors = lightColorScheme(
     primary = IsatuBlue,
@@ -82,17 +89,38 @@ private val AppShapes = Shapes(
     extraLarge = RoundedCornerShape(28.dp),
 )
 
+/** How many screens on show put ISATU navy behind the navigation bar ([NavyUnderNavigationBar]). */
+private var navyNavigationBars by mutableIntStateOf(0)
+
+/** Says this screen has navy at the very bottom, so the navigation bar's icons turn white while it shows. */
 @Composable
-fun ISATUVisitorTheme(content: @Composable () -> Unit) {
+fun NavyUnderNavigationBar() {
+    DisposableEffect(Unit) {
+        navyNavigationBars++
+        onDispose { navyNavigationBars-- }
+    }
+}
+
+@Composable
+fun ISATUVisitorTheme(barsOverBlue: Boolean = false, content: @Composable () -> Unit) {
     // The visitor portal intentionally keeps the approved white/blue institutional
     // appearance even when the device uses a dark system theme.
     val colors = LightColors
     val view = LocalView.current
+    val navyBottom = barsOverBlue || navyNavigationBars > 0
     if (!view.isInEditMode) {
         SideEffect {
-            val window = (view.context as Activity).window
-            window.statusBarColor = colors.surface.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = true
+            val activity = view.context as ComponentActivity
+            // Every screen starts in ISATU navy (or the opening animation's blue), so the status bar
+            // icons are white. The navigation bar's icons are dark over the white screens below.
+            activity.enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
+                navigationBarStyle = if (navyBottom) {
+                    SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+                } else {
+                    SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+                },
+            )
         }
     }
     MaterialTheme(

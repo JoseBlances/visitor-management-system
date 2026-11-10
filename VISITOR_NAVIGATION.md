@@ -2,7 +2,8 @@
 
 What the visitor sees in the Android app after Security checks them in, how directions and
 voice prompts work, how an arrival is confirmed, and what Security and the office see.
-Security's side of the visit is in `LIVE_MONITORING.md`. Database change:
+Security's side of the visit is in `LIVE_MONITORING.md`. What happens past the building door is
+in `INDOOR_DIRECTIONS.md`. Database change:
 `phone_tracker/visitor_arrival_migration.sql` (import after `live_monitoring_migration.sql`;
 safe to run again).
 
@@ -20,7 +21,7 @@ The **Campus visit** screen opens by itself when the pass is scanned at the gate
   mistaken for the arrival area.
 - **Blue route line:** the way to walk, along the walking routes administrators recorded in
   Campus Map → Routes (`CAMPUS_ROUTES.md`), with arrows toward the office. It goes around
-  buildings, not through them, and is planned again from every new position. The short
+  buildings, not through them, and is planned again from every new steadied position. The short
   straight legs from the visitor onto the route and from the route to the office are dotted.
   See **Walking routes** below.
 - **Dotted line:** where no recorded route leads (none passes within 40 m of the visitor or
@@ -36,6 +37,34 @@ The **Campus visit** screen opens by itself when the pass is scanned at the gate
 - **Panel (pull up):** walking time and distance, **Show pass**, voice on/off, **Guide me out**,
   check-in time, time on campus, the booked slot, office stops, settings, and location
   sharing.
+
+## A steady position
+
+Phone GPS wanders a few meters every second, and now and then a reading lands tens of meters
+away (a Wi-Fi position, or a signal bounced off a building). The app does not draw readings
+as they come (`navigation/PositionFilter.kt`):
+
+- The arrow first appears once a reading is accurate to 25 m (after 6 seconds, to 50 m),
+  never on a coarse guess or on a position more than 10 seconds old.
+- A reading farther away than the visitor could have walked is left out, so one bad reading,
+  or a burst of them beside a building, never moves the arrow. Readings that stay at a new
+  place are believed after 6 seconds when the phone's own speed says the visitor could have
+  walked there, otherwise after 20 seconds.
+- Readings worse than ±50 m never move the arrow; the banner shows the weak signal as before.
+- Other readings are averaged by their accuracy, and one farther off than walking and
+  ordinary error explain counts only a little, so the arrow edges over instead of jumping.
+  While the phone reports walking speed the arrow stays within about 4 m of the visitor.
+- Standing still, the arrow settles on the average of the readings and then does not move;
+  it lets go as soon as the visitor walks on.
+- Along a recorded route, a visitor whom GPS places within 10 m of it twice in a row is drawn
+  on the blue line, and distances and turns are measured along the line
+  (`navigation/PathFollower.kt`). The arrow leaves the line after 3 readings more than 12 m
+  from it (more with a rough reading, never more than 20 m), within 10 m of the office, and
+  past the end of the route.
+- Arrival at a gate is still judged from the readings themselves, never from the steadied position
+  or the line (see the table below), and "GPS ±4 m" is always the phone's own figure.
+
+The background uploads to Security are steadied the same way (`LIVE_MONITORING.md`).
 
 ## Walking routes
 
@@ -55,30 +84,35 @@ and finds the shortest walk along it, to any office or gate:
   out** picks the gate nearest on foot.
 - When two ways are about as long, the app keeps the one the visitor is already on, so the
   line does not flicker between them.
-- Arrival is still judged at the office pin (the table below); the route only shows the way.
+- An office with a route but no pin is placed where its route ends (the server does this in
+  `campus_map.php`), so a recorded route alone is enough for directions. A route's named
+  start ("Main Gate") without a gate pin is offered as a gate for **Guide me out**.
+- The route only shows the way. It leads to the office's pin, at its building's door.
 
-## Arrival: only what GPS can actually confirm
+## Arrival: only the visitor can say
 
-Phone GPS is accurate to about ±3–10 m outdoors and ±10–50 m indoors, and the position
-drifts a few meters even when the phone is still. The app therefore never claims more than
-the reading supports:
+Phone GPS is accurate to about ±3–10 m outdoors and ±10–50 m indoors, and it can't tell floors
+apart. An office may be upstairs, so **GPS never records an arrival at an office**: it leads to the
+pin at the building's door and asks. Only the visitor's tap counts (`INDOOR_DIRECTIONS.md`).
 
-| State | When | What the visitor sees and hears |
-|---|---|---|
-| **Arrived (GPS)** | Within the arrival distance (3 m by default) of the office pin, from a reading accurate to 8 m or better, for 3 readings in a row (about 3 seconds) | "You have arrived at IT Department. It's at CCI building, room 201." |
-| **Very close** | The pin is inside the reading's own uncertainty (accuracy 20 m or better), so GPS can't confirm the last few meters | "You're very close to IT Department… Tap I'm here when you reach it." The banner says "within about 6 m" and offers **I'm here** |
-| **Arrived (visitor)** | The visitor taps **I'm here** (shown when very close, within 30 m, with weak GPS, or when the office has no pin) | "Arrival confirmed at IT Department." |
+| Going to | State | When | What the visitor sees and hears |
+|---|---|---|---|
+| An office | **At the building** | Within 25 m of the pin along the route (or straight, with no route), from a reading accurate to 20 m | "CCI Building is just ahead. Tech Support is on the 2nd floor, Room 201. …" and the question, once |
+| An office | **Arrived** | The visitor taps **Yes, I'm here** (also reachable through **I'm here** on the banner: within 30 m, with weak GPS, or when the office has no pin) | "You have arrived at Tech Support." |
+| A gate | **Arrived (GPS)** | Within the arrival distance (3 m by default) of the gate pin, from a reading accurate to 8 m or better, for 3 readings in a row (about 3 seconds) | "You have arrived at Main Gate. Show your pass to the guard to check out." |
+| A gate | **Very close** | The pin is inside the reading's own uncertainty (accuracy 20 m or better), so GPS can't confirm the last few meters | "You're very close to Main Gate." The banner says "within about 6 m" and offers **I'm here** |
+| A gate | **Arrived (visitor)** | The visitor taps **I'm here** (shown when very close, within 30 m, or with weak GPS) | "Arrival confirmed. Show your pass to the guard to check out." |
 
 - The arrival distance is the server setting `arrival_distance_meters` in
   `mobile_api_settings` (1–30 m, default 3). Changing it needs no app update. The accuracy
   limit is `ARRIVAL_MAX_ACCURACY_METERS` in `arrival_service.php`.
-- A weak reading can never produce an arrival: with GPS at ±30 m, the app shows the distance
-  with its accuracy and stays quiet. (Version 0.3.0 used the accuracy as the arrival radius,
-  up to 30 m; that is removed.)
+- A weak reading never moves things on: with GPS at ±30 m, the app shows the distance with its
+  accuracy and stays quiet.
 - After arriving, the app stays quiet for that office, so indoor drift never restarts
   directions during a meeting. Reopening the app shows the arrival already on record.
-- Place office pins at the **entrance** visitors walk to, not the middle of a building.
-  Inside buildings GPS usually can't confirm 3 m, so visitors tap **I'm here**.
+- Place office pins at the **entrance** of the building visitors walk to, not the middle of it.
+- Older app versions (before 0.6.0) still report GPS arrivals at an office, which the server
+  checks against `arrival_distance_meters` and accepts.
 
 ## Voice directions
 
@@ -89,7 +123,8 @@ not stopped). Distances are spoken only from readings accurate to 20 m or better
 |---|---|
 | Directions start | "Heading to IT Department. It's 120 meters away, slightly to your left." |
 | 200 m, 100 m, 50 m, 10 m | "IT Department is 50 meters away, to your right." |
-| 25 m | "IT Department is just ahead." |
+| 25 m, at an office | The building and the description, as in the table above |
+| 25 m, at a gate | "Main Gate is just ahead." |
 | Walking the wrong way (25 m farther than the closest point) | "You're moving away from IT Department. It's 150 meters away, behind you." |
 | Very close / arrived | See the table above |
 | Next stop (multi-office visit) | "Next stop: Dean's Office. It's 80 meters away, to your right." |
@@ -107,7 +142,8 @@ Along a recorded route, these replace the distance prompts above:
 | 30 m before a turn | "In 25 meters, turn left." |
 | At the turn (within 7 m) | "Turn left now." (interrupts other speech) |
 | 200 m, 100 m, 50 m left (when no turn is near) | "100 meters to IT Department." |
-| 25 m left, no turn before the office | "IT Department is just ahead." |
+| 25 m left, at an office | The building and the description, as in the table above |
+| 25 m left, at a gate, no turn before it | "Main Gate is just ahead." |
 | More than 20 m off the route (3 readings in a row) | "You're off the path. The path is 25 meters to your right." |
 | Back within 10 m of it | "You're back on the path." |
 | Walking back along it (25 m farther than the closest point) | "You're going the wrong way. Turn around and follow the blue line." |
@@ -128,14 +164,13 @@ the back of a phone held upright and is corrected to true north. Distances are i
 
 ## What Security and the office see
 
-The app reports each confirmed arrival to `api/v1/arrival.php` (retried for about 10 minutes
-without a connection). The server checks a GPS arrival against the same rule, keeps only the
-first arrival per stop, and in one transaction:
+The app reports the visitor's tap to `api/v1/arrival.php` (retried for about 10 minutes
+without a connection). The server keeps only the first arrival per stop, and in one transaction:
 
 1. stores `arrived_at`, `arrival_method` (`gps` or `visitor`), and the distance and accuracy
    on the stop's appointment;
 2. notifies the office's staff: "Juan Dela Cruz has arrived at IT Department (confirmed by
-   GPS (±4 m))."; and
+   the visitor)."; and
 3. writes "Arrived at an office" to the admin activity log (Gate & visits).
 
 - **Security dashboard:** a green **Arrived** badge in the visitor list, "Arrived: IT Department
@@ -158,9 +193,9 @@ checked in). **Pin at my location** places a pin from where the administrator st
 is more accurate than clicking the map. In **Routes**, record a walking route from each gate
 to each department (`CAMPUS_ROUTES.md`); the app picks them up the next time it loads the
 campus map, with no app update. In **User Management → Department Directory**, each
-department's **location** (building, floor, room) is shown and spoken on arrival. Office
-accounts receive arrival notifications, so each office needs an active Office Personnel
-account.
+department's **location** is shown, until **Campus Map > Inside** sets its building, floor and
+room (`INDOOR_DIRECTIONS.md`). Office accounts receive arrival notifications, so each office
+needs an active Office Personnel account.
 
 ## Location sharing and privacy
 
@@ -185,10 +220,13 @@ The last campus map is kept on the phone for short losses of connection.
 | `visitor_app/.../ui/TrackingMapScreen.kt` | The screen: banner, panel, pass, sharing, I'm here |
 | `visitor_app/.../ui/CampusMapView.kt` | MapLibre map, campus layers, pins, the route line, heading-up camera |
 | `visitor_app/.../navigation/Guidance.kt` | Directions, voice prompts, turns, arrival and exit rules |
+| `visitor_app/.../ui/InsideDirections.kt` | The question near the building, and the steps past the door |
 | `visitor_app/.../navigation/WalkwayPlanner.kt` | The walkway network from recorded routes; shortest walk; turns |
 | `visitor_app/.../navigation/GeoMath.kt` | Distances, directions, the server's boundary math |
 | `visitor_app/.../navigation/HeadingSensor.kt` | Compass |
 | `visitor_app/.../navigation/LiveLocation.kt` | Second-by-second position for the screen |
+| `visitor_app/.../navigation/PositionFilter.kt` | Steadies GPS readings: leaves out jumps and weak readings, holds still when standing |
+| `visitor_app/.../navigation/PathFollower.kt` | When the arrow is drawn on the blue line |
 | `visitor_app/.../navigation/VoiceGuide.kt` | Text-to-speech |
 | `phone_tracker/api/v1/campus_map.php` | Boundary, gates, stops with locations and arrivals, walking routes, rules |
 | `phone_tracker/api/v1/arrival.php`, `phone_tracker/arrival_service.php` | Recording an arrival |
@@ -204,10 +242,9 @@ The last campus map is kept on the phone for short losses of connection.
 4. At the gate, the blue line follows the recorded route. Walk it: "In 25 meters, turn
    left", then "Turn left now" at each corner, and "just ahead" near the office. Step 25 m
    off it to hear "You're off the path", and back to hear "You're back on the path".
-5. At the pin: "You have arrived" only once you stand on it (within about 3 m, with a clear
-   signal). From farther away, or under a roof, you get "very close" and **I'm here** instead.
-   An office without a route gets the dotted pointer and the distance prompts (100, 50, 25,
-   and 10 m) instead.
+5. Within 25 m of the pin the question opens, and only **Yes, I'm here** records the arrival
+   (`INDOOR_DIRECTIONS.md`). An office without a route gets the dotted pointer and the distance
+   prompts (100 and 50 m) on the way.
 6. Check Security's Visitor Monitoring (Arrived badge and card) and the office's dashboard
    (status Arrived, notification).
 7. Tap **Guide me out** and walk to the gate along the route; at the gate, **Show pass** and
