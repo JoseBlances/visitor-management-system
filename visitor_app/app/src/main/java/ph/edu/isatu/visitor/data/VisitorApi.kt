@@ -10,7 +10,14 @@ import retrofit2.http.Query
 
 interface VisitorApi {
     @POST("auth/register.php")
-    suspend fun register(@Body request: RegisterRequest): Response<ApiEnvelope<RegisterData>>
+    suspend fun register(@Body request: RegisterRequest): Response<ApiEnvelope<SignupCodeData>>
+
+    @POST("auth/confirm_signup.php")
+    suspend fun confirmSignup(@Body request: ConfirmSignupRequest): Response<ApiEnvelope<LoginData>>
+
+    @POST("auth/resend_code.php")
+    suspend fun resendCode(@Body request: ResendCodeRequest): Response<ApiEnvelope<SignupCodeData>>
+
 
     @POST("auth/login.php")
     suspend fun login(@Body request: LoginRequest): Response<ApiEnvelope<LoginData>>
@@ -32,6 +39,7 @@ interface VisitorApi {
 
     @GET("offices.php")
     suspend fun offices(): Response<ApiEnvelope<OfficesData>>
+
 
     @GET("availability.php")
     suspend fun availability(
@@ -103,4 +111,7 @@ interface VisitorApi {
 
     @POST("arrival.php")
     suspend fun reportArrival(@Body request: ArrivalRequest): Response<ApiEnvelope<ArrivalData>>
+
+    @POST("direction_help.php")
+    suspend fun requestDirectionHelp(@Body request: DirectionHelpRequest): Response<ApiEnvelope<DirectionHelpData>>
 }

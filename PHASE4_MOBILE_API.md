@@ -26,9 +26,14 @@ fields, and configurable mobile policies.
 - Send and receive JSON using UTF-8.
 - Authenticated requests use `Authorization: Bearer <access_token>`.
 - Raw access tokens are never stored in the database; only SHA-256 hashes are stored.
-  Password-reset validation uses hashes as well. The short-lived raw recovery code waits
-  in its `outbound_emails` row only until the email worker sends it or gives up; the
-  worker then deletes it from the row.
+  A password-reset code is kept only as a hash keyed by the server's secret
+  (`auth/_password_reset.php`). The short-lived raw code waits in its `outbound_emails`
+  row only until the email worker sends it or gives up; the worker then deletes it from
+  the row.
+- "Forgot password?" emails a 6-digit code, as signing up does. It works for 15 minutes
+  and only while it is the account's newest code; 5 wrong tries end it, and an account is
+  sent at most 5 codes an hour. `reset_password.php` takes it in the `token` field, which
+  every app version sends. The reply to a code request is the same for any email.
 - Access tokens expire after 30 days by default and are revoked by sign-out or password
   reset.
 - Authentication and recovery requests are rate-limited by identity and IP address.
@@ -36,6 +41,11 @@ fields, and configurable mobile policies.
   `VISITOR_APP_ENV=development` can return a `development_reset_token` field.
 - Successful responses contain `success`, `data`, and `meta`. Errors contain `success`,
   `message`, optional field `errors`, and `meta`.
+- `data` is always a JSON object. PHP encodes an empty array as `[]`, so `api_success()` sends
+  `{}` instead: before that fix, the reply to "Forgot password?" in production was `data: []`,
+  and the app failed to read it ("Expected BEGIN_OBJECT but was BEGIN_ARRAY ... path $.data").
+  Inside `data`, an object that can be absent is `null`, never `[]`. The app (0.10.0 and newer)
+  also reads an empty `[]` as an empty object, but older apps on phones don't.
 - Every response includes an API version and request ID.
 
 ## Endpoint directory
@@ -43,11 +53,13 @@ fields, and configurable mobile policies.
 | Method | Endpoint | Authentication | Purpose |
 |---|---|---|---|
 | GET | `/health.php` | Public | Database/API readiness |
-| POST | `/auth/register.php` | Public | Register a visitor account |
+| POST | `/auth/register.php` | Public | Start a visitor account; emails a 6-digit code |
+| POST | `/auth/confirm_signup.php` | Emailed code | Create the account from the code and sign in |
+| POST | `/auth/resend_code.php` | Public | Email a new code for a sign-up still waiting for one |
 | POST | `/auth/login.php` | Public | Issue a bearer token |
 | POST | `/auth/logout.php` | Bearer | Revoke the current token |
-| POST | `/auth/request_password_reset.php` | Public | Queue generic reset instructions |
-| POST | `/auth/reset_password.php` | Public token | Set a new password and revoke all sessions |
+| POST | `/auth/request_password_reset.php` | Public | Email a 6-digit reset code (same reply for any email) |
+| POST | `/auth/reset_password.php` | Emailed code | Set a new password and revoke all sessions |
 | GET/PATCH | `/me.php` | Bearer | Read/update visitor name and contact number |
 | GET | `/offices.php` | Bearer | The five official offices and their rules |
 | GET | `/availability.php` | Bearer | Available slots for an office/date |
@@ -124,6 +136,22 @@ Configuration:
 
 The repository contains no Firebase credential. Without configuration, the worker exits
 safely and queued in-app notifications continue to work.
+
+## Creating an account
+
+Visitors are the only people who use the app, and they create their own accounts. `register.php`
+saves the sign-up in `account_requests` and emails a 6-digit code; `confirm_signup.php` turns it
+into a visitor account and signs in, only when the code is entered, so an address nobody can open
+never becomes an account (`signup_service.php`).
+
+- A code works for 10 minutes and once, allows 5 wrong tries, and can be sent again after 60
+  seconds, at most 5 times per sign-up. Sign-ups are also limited per email and per network.
+- Only an HMAC of the code is stored (key: `config/auth_secret.php`). The email queue drops the
+  code once it is sent. A development server returns it as `development_code` instead.
+- The code is sent at once when email is set up (DEPLOYMENT.md, step 4), or else waits in the
+  queue. Without email nobody can sign up, so set it up before inviting people.
+- Apps from 0.8.0 to 0.10.x send `account_type`; anything but `visitor` is refused with a message
+  to update the app.
 
 ## Account recovery email
 

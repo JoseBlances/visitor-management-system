@@ -14,6 +14,7 @@ import android.location.Location
 import android.os.Build
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -36,7 +37,16 @@ import ph.edu.isatu.visitor.MainActivity
 import ph.edu.isatu.visitor.R
 import ph.edu.isatu.visitor.VisitorApplication
 import ph.edu.isatu.visitor.data.ApiException
+import ph.edu.isatu.visitor.data.CampusStopDto
 import ph.edu.isatu.visitor.data.VisitorRepository
+import ph.edu.isatu.visitor.navigation.GeoMath
+import ph.edu.isatu.visitor.navigation.GeoPoint
+import ph.edu.isatu.visitor.navigation.NavigationPreferences
+import ph.edu.isatu.visitor.navigation.PositionFilter
+import ph.edu.isatu.visitor.navigation.PositionReading
+import ph.edu.isatu.visitor.navigation.VisitScreen
+import ph.edu.isatu.visitor.navigation.toDirections
+import ph.edu.isatu.visitor.navigation.readingTimeMillis
 
 class VisitorTrackingService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -49,10 +59,18 @@ class VisitorTrackingService : Service() {
     private var locationCallback: LocationCallback? = null
     private var anchorLocation: Location? = null
     private var monitorJob: Job? = null
+    private val filter = PositionFilter()
+    private var uploadIntervalMillis = 15_000L
+    private var queuedAtMillis: Long? = null
+    private lateinit var navigationPreferences: NavigationPreferences
+    /** Where the visitor is going next, from the campus map; null once every stop is done. */
+    @Volatile
+    private var destination: CampusStopDto? = null
 
     override fun onCreate() {
         super.onCreate()
         repository = (application as VisitorApplication).repository
+        navigationPreferences = NavigationPreferences(this)
         createChannel()
     }
 
@@ -96,6 +114,7 @@ class VisitorTrackingService : Service() {
             val session = tracking.session ?: throw IllegalStateException("The server did not create a tracking session.")
             sessionId = session.id
             maximumBatchPoints = tracking.policy.maximumBatchPoints.coerceIn(1, 100)
+            destination = repository.cachedCampusMap(appointmentId)?.destination
             requestLocationUpdates(tracking.policy.uploadIntervalSeconds.coerceIn(5, 300))
             monitorServerState()
             updateNotification("Sharing location for your checked-in visit")
@@ -119,8 +138,12 @@ class VisitorTrackingService : Service() {
         }
         locationCallback = callback
         val interval = intervalSeconds * 1000L
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
-            .setMinUpdateIntervalMillis(interval)
+        uploadIntervalMillis = interval
+        // Readings are taken more often than they are uploaded, so the filter can tell a GPS
+        // jump from a walk. Security still receives one position per upload interval.
+        val sampling = minOf(interval, SAMPLE_INTERVAL_MILLIS)
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, sampling)
+            .setMinUpdateIntervalMillis(sampling)
             .setWaitForAccurateLocation(false)
             .build()
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
@@ -128,13 +151,99 @@ class VisitorTrackingService : Service() {
         }
     }
 
+    /**
+     * Every reading steadies the position ([PositionFilter] leaves out GPS jumps and weak
+     * readings); once per upload interval the steady position is queued for Security.
+     */
     private fun handleLocation(location: Location) {
         if (sessionId <= 0) return
-        val reported = stabilize(location)
+        val elapsedMillis = readingTimeMillis(location.elapsedRealtimeNanos, SystemClock.elapsedRealtime())
+        val steady = filter.update(
+            PositionReading(
+                point = GeoPoint(location.latitude, location.longitude),
+                accuracyMeters = if (location.hasAccuracy()) location.accuracy.toDouble() else null,
+                elapsedMillis = elapsedMillis,
+                speedMetersPerSecond = if (location.hasSpeed()) location.speed.toDouble() else null,
+            ),
+        ) ?: return
+        checkBuildingReached(steady.point, steady.accuracyMeters)
+        val queuedAt = queuedAtMillis
+        if (queuedAt != null && elapsedMillis - queuedAt < uploadIntervalMillis - UPLOAD_SLACK_MILLIS) return
+        queuedAtMillis = elapsedMillis
+        val reported = stabilize(
+            Location(location).apply {
+                latitude = steady.point.latitude
+                longitude = steady.point.longitude
+                accuracy = steady.accuracyMeters.toFloat()
+            },
+        )
         scope.launch {
             repository.queueLocation(appointmentId, sessionId, reported)
             flushQueued()
         }
+    }
+
+    /**
+     * With the app in the background, tells the visitor once when they reach the building, and
+     * reminds them once if they never tap "Yes, I'm here" (INDOOR_DIRECTIONS.md). On the campus
+     * visit screen the question is already in front of them, so nothing is shown.
+     */
+    private fun checkBuildingReached(point: GeoPoint, accuracyMeters: Double) {
+        val stop = destination ?: return
+        if (stop.arrivedAt != null) return
+        val latitude = stop.latitude ?: return
+        val longitude = stop.longitude ?: return
+        val now = System.currentTimeMillis()
+        var reachedAt = navigationPreferences.reachedBuildingAt(stop.appointmentId)
+        if (reachedAt == 0L) {
+            if (accuracyMeters > BUILDING_MAX_ACCURACY_METERS ||
+                GeoMath.distanceMeters(point, GeoPoint(latitude, longitude)) > BUILDING_REACHED_METERS
+            ) {
+                return
+            }
+            navigationPreferences.saveReachedBuilding(stop.appointmentId, now)
+            reachedAt = now
+            // The map on screen has already asked.
+            if (VisitScreen.showing) navigationPreferences.takeNearNotification()
+        }
+        if (VisitScreen.showing) return
+        val directions = stop.toDirections()
+        if (navigationPreferences.takeNearNotification()) {
+            showAlert(NEAR_NOTIFICATION_ID, directions.nearNotificationTitle, directions.nearNotificationText)
+        }
+        if (now - reachedAt >= VisitScreen.ARRIVAL_REMINDER_MILLIS) {
+            // The map's latest copy says whether the tap has been made since.
+            val latest = repository.cachedCampusMap(appointmentId)?.stops?.firstOrNull { it.appointmentId == stop.appointmentId }
+            if (latest?.arrivedAt == null && navigationPreferences.takeArrivalReminder()) {
+                showAlert(REMINDER_NOTIFICATION_ID, directions.reminderTitle, directions.reminderText)
+            }
+        }
+    }
+
+    private fun showAlert(id: Int, title: String, text: String) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(ALERT_CHANNEL_ID, getString(R.string.notifications_channel_name), NotificationManager.IMPORTANCE_DEFAULT),
+        )
+        val open = PendingIntent.getActivity(
+            this,
+            id,
+            Intent(this, MainActivity::class.java)
+                .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(EXTRA_APPOINTMENT_ID, appointmentId),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        manager.notify(
+            id,
+            NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setAutoCancel(true)
+                .setContentIntent(open)
+                .build(),
+        )
     }
 
     /**
@@ -198,6 +307,13 @@ class VisitorTrackingService : Service() {
                     stopServiceNow()
                     break
                 }
+                // The campus visit screen keeps the map up to date while it shows.
+                val map = if (VisitScreen.showing) {
+                    repository.cachedCampusMap(appointmentId)
+                } else {
+                    runCatching { repository.campusMap(appointmentId) }.getOrNull()
+                }
+                if (map != null) destination = map.destination
             }
         }
     }
@@ -270,9 +386,19 @@ class VisitorTrackingService : Service() {
         const val ACTION_STOP = "ph.edu.isatu.visitor.STOP_TRACKING"
         const val EXTRA_APPOINTMENT_ID = "appointment_id"
         private const val CHANNEL_ID = "active_visit_tracking"
+        /** The same channel as the visitor's other updates (VisitorMessagingService). */
+        private const val ALERT_CHANNEL_ID = "appointment_updates"
         private const val NOTIFICATION_ID = 4101
+        private const val NEAR_NOTIFICATION_ID = 4102
+        private const val REMINDER_NOTIFICATION_ID = 4103
+        /** The building counts as reached this close to its pin, from a reading at least this accurate. */
+        private const val BUILDING_REACHED_METERS = 30.0
+        private const val BUILDING_MAX_ACCURACY_METERS = 20.0
         private const val MIN_MOVEMENT_METERS = 10f
         private const val MAX_MOVEMENT_ACCURACY_METERS = 50f
+        /** How often a reading is taken for the filter, at most the upload interval. */
+        private const val SAMPLE_INTERVAL_MILLIS = 2_000L
+        private const val UPLOAD_SLACK_MILLIS = 250L
 
         fun start(context: Context, appointmentId: Long) {
             val intent = Intent(context, VisitorTrackingService::class.java)

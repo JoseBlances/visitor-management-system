@@ -42,6 +42,14 @@ JSON for this Android client file.
    - `phone_tracker/live_monitoring_migration.sql`
    - `phone_tracker/visitor_arrival_migration.sql`
    - `phone_tracker/campus_routes_migration.sql`
+   - `phone_tracker/office_breaks_migration.sql`
+   - `phone_tracker/indoor_directions_migration.sql`
+   - `phone_tracker/teacher_visits_migration.sql`
+   - `phone_tracker/school_accounts_migration.sql`
+   - `phone_tracker/account_removal_migration.sql`
+   - `phone_tracker/password_reset_code_migration.sql`
+   - `phone_tracker/visitor_only_migration.sql` (removes the student and teacher parts the two
+     files above it added; keep all three, in this order)
 
    An existing database only needs the files it is missing. Every migration can be run
    again safely. Do not import `app_users_office_code_migration.sql`,
@@ -64,6 +72,12 @@ JSON for this Android client file.
 Only the computer that runs the PHP push worker needs the server service-account key
 and `phone_tracker/config/mobile_api.php`. Ordinary Android testers do not need either
 server secret.
+
+**On the website, ask with the system's own dialog.** For a question before an action, or
+an error message, use `AppDialog.confirm()` or `AppDialog.alert()` from
+`phone_tracker/dialogs.js` instead of the browser's `confirm()` or `alert()`. They open in
+the middle of the screen in the system's style, and the button names the action. A new page
+that needs them loads `dialogs.js` right after `auth.js`.
 
 ## Sign-in security
 

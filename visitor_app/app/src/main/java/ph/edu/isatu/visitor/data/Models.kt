@@ -37,22 +37,47 @@ data class LoginData(
     val user: UserDto = UserDto(),
 )
 
+/**
+ * Starts a visitor account. Nothing exists until the code emailed to [email] is entered
+ * ([ConfirmSignupRequest]).
+ */
 data class RegisterRequest(
     val email: String,
     val fullName: String,
     val contactNumber: String,
     val password: String,
+    /** A visitor agrees to share their location while on campus. */
     val trackingConsent: Boolean,
     val consentVersion: String,
 )
 
-data class RegisterData(
-    val user: UserDto = UserDto(),
-    val emailVerificationRequired: Boolean = false,
+/** The code is on its way. [developmentCode] is only sent by a server in development mode. */
+data class SignupCodeData(
+    val verificationRequired: Boolean = true,
+    val requestId: Long = 0,
+    val email: String = "",
+    val expiresAt: String = "",
+    val resendAfterSeconds: Int = 60,
+    val developmentCode: String? = null,
 )
 
+data class ConfirmSignupRequest(
+    val requestId: Long,
+    val code: String,
+    val installationId: String,
+    val deviceName: String,
+)
+
+data class ResendCodeRequest(val requestId: Long)
+
 data class PasswordResetRequest(val email: String)
-data class PasswordResetData(val developmentResetToken: String? = null)
+/** "Forgot password?" sent its 6-digit code. The reply is the same whether or not the email has an account. */
+data class PasswordResetData(
+    val codeMinutes: Int = 15,
+    val resendAfterSeconds: Int = 60,
+    /** Only from a server on a developer's computer, so it can be tried without email. */
+    val developmentResetToken: String? = null,
+)
 data class ResetPasswordRequest(val email: String, val token: String, val newPassword: String)
 data class ProfileData(val user: UserDto = UserDto())
 data class ProfileUpdateRequest(val fullName: String, val contactNumber: String)
@@ -67,6 +92,8 @@ data class OfficeRuleDto(
 data class OfficeDto(
     val code: String = "",
     val name: String = "",
+    /** Where the office is, e.g. "CCI Building, 2nd floor, Room 201". */
+    val location: String = "",
     val acceptingVisitors: Boolean = false,
     val unavailableReason: String = "",
     val availableAgainAt: String? = null,
@@ -344,14 +371,27 @@ data class CampusPointDto(val latitude: Double = 0.0, val longitude: Double = 0.
 
 data class CampusGateDto(val name: String = "", val latitude: Double = 0.0, val longitude: Double = 0.0)
 
+/** One step from the building door to the office door (Campus Map > Inside). */
+data class DirectionStepDto(
+    val text: String = "",
+    /** Relative to the site, like uploads/directions/abc.jpg; empty when the step has no photo. */
+    val photo: String = "",
+)
+
 /** One office stop on the campus map. Coordinates are null until an admin places the pin. */
 data class CampusStopDto(
     val appointmentId: Long = 0,
     val officeCode: String = "",
     val label: String = "",
-    /** Where the office is, from the Department Directory, e.g. "CCI building, room 201". */
+    /** Where the office is, from the Office Directory, e.g. "CCI building, room 201". */
     val location: String = "",
     val description: String = "",
+    /** Where the office is inside its building, and how to get there from the door. */
+    val building: String = "",
+    val floor: String = "",
+    val room: String = "",
+    val visitorMessage: String = "",
+    val directionSteps: List<DirectionStepDto> = emptyList(),
     val latitude: Double? = null,
     val longitude: Double? = null,
     val status: String = "",
@@ -421,4 +461,14 @@ data class ArrivalData(
     val arrivedAt: String? = null,
     val arrivalMethod: String? = null,
     val alreadyRecorded: Boolean = false,
+)
+
+/** POST direction_help.php: "I can't find it". [stepNumber] counts from 1. */
+data class DirectionHelpRequest(val appointmentId: Long, val stepNumber: Int?)
+
+data class DirectionHelpData(
+    val appointmentId: Long = 0,
+    /** False when the office has no active staff account to tell. */
+    val officeTold: Boolean = false,
+    val alreadyTold: Boolean = false,
 )

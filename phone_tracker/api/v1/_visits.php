@@ -90,7 +90,8 @@ function mobile_create_visit(mysqli $conn, array $user, array $input): array
         $errors["location_consent"] = "Location consent and its displayed policy version are required";
     }
 
-    $offices = appointment_office_active_map();
+    // Only offices with someone to answer (appointment_office_bookable_map()).
+    $offices = appointment_office_bookable_map();
     $now = new DateTime("now");
     $stops = [];
     $seenOffices = [];
@@ -261,6 +262,15 @@ function mobile_prepare_walk_in_stops(mysqli $conn, array &$stops, DateTime $now
                 appointment_office_label($stop["office_code"]) . ": "
                 . ($reason !== "" ? $reason : "This office is not accepting visitors right now")
             );
+        }
+        $blocked = office_walk_in_block_reason(
+            $conn,
+            $stop["office_code"],
+            appointment_office_label($stop["office_code"]),
+            DateTimeImmutable::createFromMutable($now)
+        );
+        if ($blocked !== null) {
+            throw new DomainException($blocked);
         }
         $stop["start"] = clone $now;
         $stop["end"] = (clone $now)->modify("+60 minutes");

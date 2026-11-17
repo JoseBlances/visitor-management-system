@@ -58,7 +58,8 @@ if ($startRaw === "") {
 }
 $endRaw = appointment_input($input, "scheduled_end_at");
 
-$offices = appointment_office_active_map();
+// Only offices with someone to answer (appointment_office_bookable_map()).
+$offices = appointment_office_bookable_map();
 if ($officeCode === "" || !isset($offices[$officeCode])) {
     echo json_encode(["success" => false, "message" => "Select a valid office"]);
     exit;

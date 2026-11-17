@@ -50,6 +50,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import ph.edu.isatu.visitor.data.AvailabilitySlotDto
 import java.time.Instant
 import java.time.LocalDate
@@ -80,10 +81,10 @@ fun BookingScreen(state: VisitorUiState, viewModel: AppViewModel) {
     val multiStop = remember { MultiStopDraft() }
     var multipleOffices by remember { mutableStateOf(false) }
 
-    // Rebooking after "None of these work": keep the request's details, pick a new time.
+    // Rebooking: keep the request's details, so only a new time or office is left to choose.
     LaunchedEffect(state.bookingPrefill) {
         state.bookingPrefill?.let { prefill ->
-            visitType = "appointment"
+            visitType = prefill.visitType
             multipleOffices = false
             officeCode = prefill.officeCode
             purpose = prefill.purpose
@@ -124,18 +125,41 @@ fun BookingScreen(state: VisitorUiState, viewModel: AppViewModel) {
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    "VISITOR REGISTRATION",
-                    style = MaterialTheme.typography.headlineMedium,
+                    "Book a visit",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp),
                     color = IsatuBlueDark,
-                    textAlign = TextAlign.Center,
                 )
-                Text("Choose how you plan to visit the campus.", color = MutedInk, textAlign = TextAlign.Center)
+                Text(
+                    "Choose how you'll visit the campus.",
+                    color = MutedInk,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+
+        if (!multipleOffices) {
+            item {
+                SelectionField(
+                    label = "Destination",
+                    selectedText = selectedOffice?.name.orEmpty(),
+                    placeholder = "Select an office",
+                    options = state.offices.map { it.code to it.name },
+                    enabledOptions = state.offices.filter { it.acceptingVisitors }.map { it.code }.toSet(),
+                    onSelect = { officeCode = it },
+                )
+                selectedOffice?.location?.takeIf { it.isNotBlank() }?.let { location ->
+                    Text(location, style = MaterialTheme.typography.bodySmall, color = MutedInk, modifier = Modifier.padding(top = 6.dp))
+                }
+                selectedOffice?.takeIf { !it.acceptingVisitors }?.let {
+                    Text(
+                        it.unavailableReason.ifBlank { "This office is not accepting visitors right now." },
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
         }
 
@@ -190,25 +214,6 @@ fun BookingScreen(state: VisitorUiState, viewModel: AppViewModel) {
             )
             item { Spacer(Modifier.height(12.dp)) }
             return@LazyColumn
-        }
-
-        item {
-            SelectionField(
-                label = "Destination",
-                selectedText = selectedOffice?.name.orEmpty(),
-                placeholder = "Select an office",
-                options = state.offices.map { it.code to it.name },
-                enabledOptions = state.offices.filter { it.acceptingVisitors }.map { it.code }.toSet(),
-                onSelect = { officeCode = it },
-            )
-            selectedOffice?.takeIf { !it.acceptingVisitors }?.let {
-                Text(
-                    it.unavailableReason.ifBlank { "This office is not accepting visitors right now." },
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
         }
 
         item {

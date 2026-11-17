@@ -89,6 +89,17 @@
         return directoryState.offices.filter(function (office) { return office.is_active; });
     }
 
+    /** The offices Office Personnel can be assigned to, in a <select>. */
+    function fillOfficeOptions(select, placeholder) {
+        const current = select.value;
+        select.replaceChildren();
+        if (placeholder) {
+            select.appendChild(new Option(placeholder, ""));
+        }
+        activeOffices().forEach(function (office) { select.appendChild(new Option(office.name, office.code)); });
+        select.value = Array.from(select.options).some(function (option) { return option.value === current; }) ? current : (placeholder ? "" : select.value);
+    }
+
     /** Fills every <select data-department-select> with Administration, Security, and each office. */
     function fillDepartmentSelects() {
         document.querySelectorAll("[data-department-select]").forEach(function (select) {
@@ -105,22 +116,8 @@
             }
             select.value = Array.from(select.options).some(function (option) { return option.value === current; }) ? current : "";
         });
-        const officeSelects = [
-            [document.getElementById("newUserOfficeCode"), "Select department"],
-            [document.getElementById("editDepartment"), ""],
-        ];
-        officeSelects.forEach(function (pair) {
-            const select = pair[0];
-            const current = select.value;
-            select.replaceChildren();
-            if (pair[1]) {
-                select.appendChild(new Option(pair[1], ""));
-            }
-            activeOffices().forEach(function (office) {
-                select.appendChild(new Option(office.name, office.code));
-            });
-            select.value = Array.from(select.options).some(function (option) { return option.value === current; }) ? current : (pair[1] ? "" : select.value);
-        });
+        fillOfficeOptions(document.getElementById("newUserOfficeCode"), "Select office");
+        fillOfficeOptions(document.getElementById("editDepartment"), "");
         const routeSelect = document.getElementById("routeOfficeFilter");
         const routeCurrent = routeSelect.value;
         routeSelect.replaceChildren(new Option("All destinations", ""));
@@ -190,11 +187,34 @@
         return data;
     }
 
+    /** Visitors sign up in the app themselves; they are not staff. */
+    function isAppAccount(user) {
+        return user.role === "visitor";
+    }
+
+    /** The confirmation before removing an account: what goes, and what stays in the records. */
+    function removalQuestion(user, label) {
+        let effect = "What they did stays in the records.";
+        if (user && isAppAccount(user)) {
+            effect = "Their upcoming visits are cancelled, and each office is told. "
+                + "Past visits stay in the records under their name.";
+        }
+        return {
+            title: "Remove " + label + "?",
+            message: effect + "\n\nThey are signed out everywhere. This cannot be undone.",
+            confirmLabel: "Remove account",
+            danger: true,
+        };
+    }
+
+    /** fetch() fails with a TypeError only when the server can't be reached at all. */
+    const NO_CONNECTION = { title: "Couldn't reach the server", message: "Check your connection and try again." };
+
     function roleLabel(role) {
         const labels = {
-            admin: "Admin",
+            admin: "Administrator",
             security: "Security",
-            offices: "Office",
+            offices: "Office Personnel",
             visitor: "Visitor",
         };
         return labels[role] || role || "—";
@@ -589,11 +609,12 @@
             const identity = document.createElement("span");
             const strong = document.createElement("strong");
             strong.textContent = displayName;
-            if (!user.has_name && user.role !== "visitor") {
+            if (!user.has_name && !isAppAccount(user)) {
                 strong.appendChild(element("span", "sec-badge is-warn person-no-name", "No name on file"));
             }
             const small = document.createElement("small");
-            small.textContent = (user.username || "") + (user.position ? " · " + user.position : "");
+            // Visitors are known by their email; their usernames are made up for them.
+            small.textContent = isAppAccount(user) ? (user.email || user.username || "") : (user.username || "") + (user.position ? " · " + user.position : "");
             identity.append(strong, small);
             userCell.append(avatar, identity);
             row.appendChild(userCell);
@@ -641,6 +662,11 @@
         });
 
         usersEmpty.hidden = users.length > 0;
+        const noVisitorsYet = users.length === 0 && userState.role === "visitor" && !userState.query && !userState.department;
+        text("usersEmptyTitle", noVisitorsYet ? "No visitor accounts yet" : "No matching users");
+        text("usersEmptyText", noVisitorsYet
+            ? "Visitors appear here once they create an account in the ISATU Visits app or on the visitor website."
+            : "Try a different role or search term.");
         const wrap = usersBody.closest(".admin-table-wrap");
         if (wrap) {
             wrap.hidden = users.length === 0;
@@ -651,6 +677,16 @@
             text("usersShowing", "Showing " + (start + 1) + "–" + (start + pageUsers.length) + " of " + users.length + " users");
         }
         renderUserPages(totalPages);
+    }
+
+    /** How many accounts each role filter tab shows. */
+    function renderRoleCounts() {
+        document.querySelectorAll("[data-role-count]").forEach(function (badge) {
+            const role = badge.getAttribute("data-role-count");
+            const count = userState.users.filter(function (user) { return !role || user.role === role; }).length;
+            badge.textContent = count > 999 ? "999+" : String(count);
+            badge.hidden = false;
+        });
     }
 
     function updateUserSummary() {
@@ -671,6 +707,7 @@
             }
             userState.users = Array.isArray(data.data) ? data.data : [];
             updateUserSummary();
+            renderRoleCounts();
             renderUsers();
             if (activityState.loaded) {
                 fillPersonSelect();
@@ -1174,7 +1211,9 @@
         document.querySelectorAll("[data-analytics-period]").forEach(function (button) {
             button.classList.toggle("is-active", button.getAttribute("data-analytics-period") === analyticsState.period);
         });
-        document.getElementById("analyticsExportBtn").href = "admin_analytics.php?period=" + encodeURIComponent(analyticsState.period) + "&format=csv";
+        const exportPeriod = "admin_analytics.php?period=" + encodeURIComponent(analyticsState.period);
+        document.getElementById("analyticsExportBtn").href = exportPeriod + "&format=xlsx";
+        document.getElementById("analyticsCsvBtn").href = exportPeriod + "&format=csv";
         try {
             const data = await fetchJson("admin_analytics.php?period=" + encodeURIComponent(analyticsState.period));
             if (!data || !data.success) {
@@ -1211,7 +1250,7 @@
         } else if (user.must_change_password) {
             badges.push([user.temp_password_expires_at ? "Temporary password" : "Default password", "is-warn"]);
         }
-        if (user.role !== "visitor") {
+        if (!isAppAccount(user)) {
             if (user.two_factor_enabled) {
                 badges.push(["2-step on", "is-good"]);
             } else {
@@ -1283,7 +1322,7 @@
                 : "Default password, must be changed at sign-in";
         }
         let twoFactor = "Not used for visitor accounts";
-        if (user.role !== "visitor") {
+        if (!isAppAccount(user)) {
             twoFactor = user.two_factor_enabled ? "On" : (user.two_factor_required ? "Required, set up at next sign-in" : "Off");
         }
         const details = document.getElementById("manageUserDetails");
@@ -1292,7 +1331,7 @@
             ["Name", user.has_name ? user.first_name + " " + user.last_name : "No name on file — add it with Edit details"],
             ["Position", user.position || "—"],
             ["Username", user.username],
-            ["Role", roleLabel(user.role) + (user.role === "offices" ? " · " + (officeNames[user.office_code] || user.office_code) : "")],
+            ["Role", roleLabel(user.role) + (user.role === "offices" ? " · " + (user.department || user.office_code) : "")],
             ["Contact", [user.contact_number, user.email].filter(Boolean).join(" · ") || "—"],
             ["Status", (Number(user.is_active) === 1 ? "Active" : "Suspended") + (user.online ? " · online now" : (user.last_seen_at ? " · last seen " + UI.formatRelative(user.last_seen_at) : ""))],
             ["Last sign-in", user.last_login_at ? UI.formatDateTime(user.last_login_at) + " · " + UI.formatIp(user.last_login_ip) : "Never"],
@@ -1315,10 +1354,10 @@
         const actions = document.getElementById("manageUserActions");
         actions.replaceChildren();
         const label = user.display_name || user.username;
-        addManageAction(actions, "Edit details", "Name, position, contact details" + (user.role === "offices" ? ", and department." : "."), "Edit details", function () {
+        addManageAction(actions, "Edit details", "Name, position, contact details" + (user.role === "offices" ? ", and office." : "."), "Edit details", function () {
             openEditDetails(user);
         });
-        if (user.role !== "visitor") {
+        if (!isAppAccount(user)) {
             addManageAction(actions, "View activity", "Sign-ins, approvals, check-ins, and other actions by this person.", "View activity", function () {
                 manageUserDialog.close();
                 openPersonDialog(user.id);
@@ -1333,21 +1372,35 @@
         }
         if (user.locked) {
             addManageAction(actions, "Unlock sign-in", "Lets this account sign in again right away.", "Unlock", function () {
-                runManageAction("unlock_user", user, "");
+                runManageAction("unlock_user", user, null);
             });
         }
         addManageAction(actions, "Reset password", "Creates a one-time temporary password and signs the user out everywhere.", "Reset password", function () {
-            runManageAction("reset_password", user, "Reset the password for " + label + "? They will be signed out on every device.");
+            runManageAction("reset_password", user, {
+                title: "Reset the password for " + label + "?",
+                message: "This creates a one-time temporary password and signs them out on every device.",
+                confirmLabel: "Reset password",
+            });
         });
         if (user.two_factor_enabled) {
             addManageAction(actions, "Reset two-step verification", user.two_factor_required
                 ? "For a lost phone. They set it up again at their next sign-in."
                 : "For a lost phone. Turns two-step verification off for this account.", "Reset 2-step", function () {
-                runManageAction("reset_two_factor", user, "Reset two-step verification for " + label + "?");
+                runManageAction("reset_two_factor", user, {
+                    title: "Reset two-step verification for " + label + "?",
+                    message: user.two_factor_required
+                        ? "They set it up again at their next sign-in."
+                        : "This turns two-step verification off for this account.",
+                    confirmLabel: "Reset 2-step",
+                });
             });
         }
         addManageAction(actions, "Sign out everywhere", "Ends this user's open sessions on every device.", "Sign out", function () {
-            runManageAction("force_logout", user, "Sign " + label + " out on every device?");
+            runManageAction("force_logout", user, {
+                title: "Sign " + label + " out on every device?",
+                message: "This ends their open sessions everywhere.",
+                confirmLabel: "Sign out",
+            });
         });
     }
 
@@ -1363,7 +1416,7 @@
         document.getElementById("editDepartmentField").hidden = !isOffice;
         if (isOffice) {
             const select = document.getElementById("editDepartment");
-            // Keep the person's current department selectable even if it was archived.
+            // Keep the person's current office selectable even if it was archived.
             if (!Array.from(select.options).some(function (option) { return option.value === user.office_code; })) {
                 select.appendChild(new Option((officeNames[user.office_code] || user.office_code) + " (current)", user.office_code));
             }
@@ -1403,8 +1456,11 @@
             return;
         }
         if (user.role === "offices" && payload.office_code !== user.office_code
-            && !window.confirm("Move " + (user.display_name || user.username) + " to " + (officeNames[payload.office_code] || payload.office_code)
-                + "? They will be signed out and will only see that department's appointments.")) {
+            && !(await AppDialog.confirm({
+                title: "Move " + (user.display_name || user.username) + " to " + (officeNames[payload.office_code] || payload.office_code) + "?",
+                message: "They will be signed out and will only see that office's appointments.",
+                confirmLabel: "Move",
+            }))) {
             return;
         }
         const button = document.getElementById("saveEditDetailsBtn");
@@ -1437,107 +1493,132 @@
         }
     }
 
-    /* ---------- Department directory ---------- */
+    /* ---------- Office directory (admin_departments.php) ---------- */
+
+    function departmentFlags(department) {
+        const flags = element("div", "dept-flags");
+        if (department.is_active) {
+            flags.appendChild(element("span", "sec-badge " + (department.accepting_visitors ? "is-good" : "is-warn"),
+                department.accepting_visitors ? "Accepting visitors" : "Not accepting visitors"));
+        }
+        if (department.has_map_pin) {
+            flags.appendChild(element("span", "sec-badge is-good", "On campus map"));
+        } else {
+            const pin = element("button", "sec-badge is-warn dept-pin-link", "No map pin — add one");
+            pin.type = "button";
+            pin.dataset.deptAction = "pin";
+            flags.appendChild(pin);
+        }
+        if (department.is_active && department.personnel.filter(function (p) { return p.is_active; }).length === 0) {
+            flags.appendChild(element("span", "sec-badge is-warn", "Hidden from visitors: no one to answer"));
+        }
+        return flags;
+    }
+
+    function departmentPeople(department) {
+        const people = element("ul", "dept-people");
+        department.personnel.forEach(function (person) {
+            const item = element("li");
+            const button = element("button", "dept-person");
+            button.type = "button";
+            button.dataset.personId = String(person.id);
+            button.title = "Show " + person.name + "'s activity";
+            button.append(
+                element("span", "dept-dot" + (person.online ? " is-online" : ""), ""),
+                element("span", "dept-person-name", person.name + (person.position ? " · " + person.position : "")),
+            );
+            if (!person.has_name) {
+                button.appendChild(element("span", "sec-badge is-warn", "No name"));
+            }
+            if (!person.is_active) {
+                button.appendChild(element("span", "sec-badge is-muted", "Suspended"));
+            }
+            item.appendChild(button);
+            people.appendChild(item);
+        });
+        if (!department.personnel.length) {
+            people.appendChild(element("li", "dept-empty", "No Office Personnel yet"));
+        }
+        return people;
+    }
+
+    function departmentActions(className, department, list) {
+        const actions = element(className ? "div" : "footer", className || "dept-actions");
+        list.forEach(function (pair) {
+            const button = element("button", pair[2] || "sec-manage-button", pair[0]);
+            button.type = "button";
+            button.dataset.deptAction = pair[1];
+            if (department) {
+                button.dataset.code = department.code;
+            }
+            actions.appendChild(button);
+        });
+        return actions;
+    }
+
+    function standardDepartmentActions(department) {
+        const list = [];
+        if (department.is_active) {
+            list.push(["Add personnel", "add-person"]);
+        }
+        list.push(["Edit", "edit"]);
+        list.push([department.is_active ? "Archive" : "Restore", department.is_active ? "archive" : "restore"]);
+        if (department.total_appointments === 0 && department.personnel.length === 0) {
+            list.push(["Delete", "delete", "sec-manage-button is-danger"]);
+        }
+        return list;
+    }
+
+    /** One office's card: its people, what visitors see, and what the admin can do with it. */
+    function renderDepartmentCard(department) {
+        const card = element("article", "dept-card" + (department.is_active ? "" : " is-archived"));
+        const header = element("header", "dept-card-header");
+        const title = element("div");
+        title.append(element("h3", "", department.name), element("span", "dept-code", department.code));
+        header.append(title, element("span", "sec-badge " + (department.is_active ? "is-good" : "is-muted"), department.is_active ? "Active" : "Archived"));
+        card.appendChild(header);
+        card.appendChild(element("p", "dept-location", department.location || "No location set"));
+        if (department.description) {
+            card.appendChild(element("p", "dept-description", department.description));
+        }
+        const stats = element("div", "dept-stats");
+        [
+            [department.personnel.length, department.personnel.length === 1 ? "Person" : "People"],
+            [department.pending_appointments, "Waiting for approval"],
+            [department.open_appointments, "Open appointments"],
+        ].forEach(function (stat) {
+            const box = element("div");
+            box.append(element("strong", "", stat[0]), element("span", "", stat[1]));
+            stats.appendChild(box);
+        });
+        card.appendChild(stats);
+        card.appendChild(departmentFlags(department));
+        card.appendChild(departmentPeople(department));
+        card.dataset.code = department.code;
+        card.appendChild(departmentActions("", department, standardDepartmentActions(department)));
+        return card;
+    }
 
     function renderDepartments() {
         const grid = document.getElementById("departmentsGrid");
         grid.replaceChildren();
         departmentState.departments.forEach(function (department) {
-            const card = element("article", "dept-card" + (department.is_active ? "" : " is-archived"));
-            const header = element("header", "dept-card-header");
-            const title = element("div");
-            title.append(element("h3", "", department.name), element("span", "dept-code", department.code));
-            header.append(title, element("span", "sec-badge " + (department.is_active ? "is-good" : "is-muted"), department.is_active ? "Active" : "Archived"));
-            card.appendChild(header);
-            card.appendChild(element("p", "dept-location", department.location || "No location set"));
-            if (department.description) {
-                card.appendChild(element("p", "dept-description", department.description));
-            }
-
-            const stats = element("div", "dept-stats");
-            [
-                [department.personnel.length, department.personnel.length === 1 ? "Person" : "People"],
-                [department.pending_appointments, "Waiting for approval"],
-                [department.open_appointments, "Open appointments"],
-            ].forEach(function (stat) {
-                const box = element("div");
-                box.append(element("strong", "", stat[0]), element("span", "", stat[1]));
-                stats.appendChild(box);
-            });
-            card.appendChild(stats);
-
-            const flags = element("div", "dept-flags");
-            if (department.is_active) {
-                flags.appendChild(element("span", "sec-badge " + (department.accepting_visitors ? "is-good" : "is-warn"),
-                    department.accepting_visitors ? "Accepting visitors" : "Not accepting visitors"));
-            }
-            if (department.has_map_pin) {
-                flags.appendChild(element("span", "sec-badge is-good", "On campus map"));
-            } else {
-                const pin = element("button", "sec-badge is-warn dept-pin-link", "No map pin — add one");
-                pin.type = "button";
-                pin.dataset.deptAction = "pin";
-                flags.appendChild(pin);
-            }
-            if (department.is_active && department.personnel.filter(function (p) { return p.is_active; }).length === 0) {
-                flags.appendChild(element("span", "sec-badge is-warn", "No one to approve requests"));
-            }
-            card.appendChild(flags);
-
-            const people = element("ul", "dept-people");
-            department.personnel.forEach(function (person) {
-                const item = element("li");
-                const button = element("button", "dept-person");
-                button.type = "button";
-                button.dataset.personId = String(person.id);
-                button.title = "Show " + person.name + "'s activity";
-                button.append(
-                    element("span", "dept-dot" + (person.online ? " is-online" : ""), ""),
-                    element("span", "dept-person-name", person.name + (person.position ? " · " + person.position : "")),
-                );
-                if (!person.has_name) {
-                    button.appendChild(element("span", "sec-badge is-warn", "No name"));
-                }
-                if (!person.is_active) {
-                    button.appendChild(element("span", "sec-badge is-muted", "Suspended"));
-                }
-                item.appendChild(button);
-                people.appendChild(item);
-            });
-            if (!department.personnel.length) {
-                people.appendChild(element("li", "dept-empty", "No Office Personnel yet"));
-            }
-            card.appendChild(people);
-
-            const actions = element("footer", "dept-actions");
-            const addAction = function (label, action, className) {
-                const button = element("button", className || "sec-manage-button", label);
-                button.type = "button";
-                button.dataset.deptAction = action;
-                actions.appendChild(button);
-            };
-            if (department.is_active) {
-                addAction("Add personnel", "add-person");
-            }
-            addAction("Edit", "edit");
-            addAction(department.is_active ? "Archive" : "Restore", department.is_active ? "archive" : "restore");
-            if (department.total_appointments === 0 && department.personnel.length === 0) {
-                addAction("Delete", "delete", "sec-manage-button is-danger");
-            }
-            card.dataset.code = department.code;
-            card.appendChild(actions);
-            grid.appendChild(card);
+            grid.appendChild(renderDepartmentCard(department));
         });
         if (!departmentState.departments.length) {
-            grid.appendChild(element("p", "dept-empty", "No departments yet. Add the first one."));
+            grid.appendChild(element("p", "dept-empty", "No offices yet. Add the first one."));
         }
+    }
+
+    function findDepartment(code) {
+        return departmentState.departments.find(function (department) { return department.code === code; }) || null;
     }
 
     async function loadDepartments() {
         try {
             const data = await fetchJson("admin_departments.php");
             if (!data || !data.success) {
-                showMessage("departmentsError", (data && data.message) || "Could not load the department directory.");
+                showMessage("departmentsError", (data && data.message) || "Could not load the office directory.");
                 return;
             }
             showMessage("departmentsError", "");
@@ -1550,11 +1631,12 @@
         }
     }
 
+    /** Adds an office, or edits one when [department] is given. */
     function openDepartmentDialog(department) {
         departmentState.editingCode = department ? department.code : "";
         departmentState.codeEdited = Boolean(department);
-        text("departmentDialogTitle", department ? "Edit " + department.name : "Add department");
-        text("saveDepartmentBtn", department ? "Save changes" : "Add department");
+        text("departmentDialogTitle", department ? "Edit " + department.name : "Add office");
+        text("saveDepartmentBtn", department ? "Save changes" : "Add office");
         document.getElementById("departmentName").value = department ? department.name : "";
         const code = document.getElementById("departmentCode");
         code.value = department ? department.code : "";
@@ -1562,7 +1644,11 @@
         text("departmentCodeHint", department
             ? "The short code is permanent because appointments and accounts store it."
             : "Used in records and reports. It cannot be changed later.");
-        document.getElementById("departmentLocation").value = department ? department.location : "";
+        const locationField = document.getElementById("departmentLocation");
+        locationField.value = department ? department.location : "";
+        // An office with directions takes its location from them (Campus Map > Inside).
+        locationField.readOnly = Boolean(department && department.location_from_directions);
+        document.getElementById("departmentLocationHint").hidden = !locationField.readOnly;
         document.getElementById("departmentDescription").value = department ? department.description : "";
         showMessage("departmentFormError", "");
         document.getElementById("departmentDialog").showModal();
@@ -1599,7 +1685,7 @@
             description: document.getElementById("departmentDescription").value.trim(),
         };
         if (payload.name.length < 2) {
-            showMessage("departmentFormError", "Enter the department name.");
+            showMessage("departmentFormError", "Enter the office name.");
             return;
         }
         const button = document.getElementById("saveDepartmentBtn");
@@ -1608,7 +1694,7 @@
             const data = await departmentRequest(payload);
             if (!data || !data.success) {
                 if (!data || !data.cancelled) {
-                    showMessage("departmentFormError", (data && data.message) || "Could not save the department.");
+                    showMessage("departmentFormError", (data && data.message) || "Could not save the office.");
                 }
                 return;
             }
@@ -1640,12 +1726,15 @@
     }
 
     async function handleDepartmentAction(button) {
-        const card = button.closest(".dept-card");
-        const department = departmentState.departments.find(function (item) { return item.code === (card && card.dataset.code); });
+        const action = button.dataset.deptAction;
+        if (action === "pin") {
+            switchView("campus");
+            return;
+        }
+        const department = findDepartment(button.dataset.code || (button.closest("[data-code]") || {dataset: {}}).dataset.code);
         if (!department) {
             return;
         }
-        const action = button.dataset.deptAction;
         if (action === "edit") {
             openDepartmentDialog(department);
             return;
@@ -1654,22 +1743,22 @@
             openAddUser("offices", department.code);
             return;
         }
-        if (action === "pin") {
-            switchView("campus");
-            return;
-        }
-        let confirmText = "";
+        let question = null;
         if (action === "archive") {
             const people = department.personnel.filter(function (p) { return p.is_active; }).length;
-            confirmText = "Archive " + department.name + "?\n\nVisitors will no longer be able to book it. Its history stays."
-                + (department.open_appointments ? "\n" + department.open_appointments + " open appointment(s) will still need to be handled." : "")
-                + (people ? "\n" + people + " active personnel are still assigned — move or suspend them afterwards." : "");
+            question = {
+                title: "Archive " + department.name + "?",
+                message: "Visitors will no longer be able to book it. Its history stays."
+                    + (department.open_appointments ? "\n\n" + department.open_appointments + " open appointment(s) will still need to be handled." : "")
+                    + (people ? "\n\n" + people + " active personnel are still assigned. Move or suspend them afterwards." : ""),
+                confirmLabel: "Archive",
+            };
         } else if (action === "delete") {
-            confirmText = "Delete " + department.name + "? This cannot be undone.";
+            question = { title: "Delete " + department.name + "?", message: "This cannot be undone.", confirmLabel: "Delete", danger: true };
         } else if (action === "restore") {
-            confirmText = "Make " + department.name + " active again so visitors can book it?";
+            question = { title: "Make " + department.name + " active again?", message: "Visitors will be able to book it.", confirmLabel: "Make active" };
         }
-        if (confirmText && !window.confirm(confirmText)) {
+        if (question && !(await AppDialog.confirm(question))) {
             return;
         }
         button.disabled = true;
@@ -1677,7 +1766,7 @@
         button.disabled = false;
         if (!data || !data.success) {
             if (!data || !data.cancelled) {
-                showMessage("departmentsError", (data && data.message) || "Could not update the department.");
+                showMessage("departmentsError", (data && data.message) || "Could not update the office.");
             }
             return;
         }
@@ -1742,7 +1831,7 @@
                     return false;
                 }
                 if (!activityState.department) {
-                    return user.role !== "visitor";
+                    return !isAppAccount(user);
                 }
                 return departmentKey(user) === activityState.department;
             })
@@ -1792,7 +1881,8 @@
         }
         const requestId = activityState.requestId;
         const range = activityRange();
-        document.getElementById("uaExportBtn").href = "admin_activity.php?" + activityParams({ format: "csv" }).toString();
+        document.getElementById("uaExportBtn").href = "admin_activity.php?" + activityParams({ format: "xlsx" }).toString();
+        document.getElementById("uaCsvBtn").href = "admin_activity.php?" + activityParams({ format: "csv" }).toString();
         showMessage("uaError", "");
         const params = activityParams({ limit: "50" });
         if (!reset && activityState.nextBeforeId) {
@@ -2136,8 +2226,9 @@
         host.appendChild(row);
     }
 
-    async function runManageAction(action, user, confirmText) {
-        if (confirmText && !window.confirm(confirmText)) {
+    /** question: what AppDialog.confirm() asks first, or null to run it straight away. */
+    async function runManageAction(action, user, question) {
+        if (question && !(await AppDialog.confirm(question))) {
             return;
         }
         showMessage("manageUserError", "");
@@ -2304,7 +2395,7 @@
             row.appendChild(result);
             appendCell(row, attempt.device);
             appendCell(row, UI.formatIp(attempt.ip));
-            appendCell(row, attempt.channel === "mobile" ? "Visitor app" : "Website");
+            appendCell(row, attempt.channel === "mobile" ? "ISATU Visits app" : "Website");
             attemptBody.appendChild(row);
         });
         document.getElementById("attemptsWrap").hidden = data.attempts.length === 0;
@@ -2362,14 +2453,44 @@
         }
     }
 
+    const ADD_USER_ROLES = {
+        offices: {
+            add: "Add office personnel",
+            position: "e.g. Office Secretary",
+            callout: "A one-time password is created. It expires in 24 hours, and they choose their own password at first sign-in.",
+        },
+        security: {
+            add: "Add security",
+            position: "e.g. Gate guard",
+            callout: "A one-time password is created. It expires in 24 hours, and they choose their own password at first sign-in.",
+        },
+        admin: {
+            add: "Add administrator",
+            position: "e.g. System administrator",
+            callout: "A one-time password is created. It expires in 24 hours, and they choose their own password at first sign-in. Administrators also set up two-step verification.",
+        },
+    };
+
+    /** The role comes first, and only that role's fields show. */
     function updateOfficeField() {
-        document.getElementById("newUserTwoFactorNote").hidden = document.getElementById("newUserRole").value !== "admin";
-        const showOffice = document.getElementById("newUserRole").value === "offices";
-        const field = document.getElementById("newUserOfficeField");
+        const role = ADD_USER_ROLES[document.getElementById("newUserRole").value] ? document.getElementById("newUserRole").value : "offices";
+        document.getElementById("newUserRole").value = role;
+        const details = ADD_USER_ROLES[role];
+        document.querySelectorAll("#newRoleCards .role-card").forEach(function (card) {
+            const on = card.dataset.role === role;
+            card.classList.toggle("is-on", on);
+            card.querySelector("input").checked = on;
+        });
+        addUserDialog.querySelectorAll("[data-only]").forEach(function (field) {
+            field.hidden = field.dataset.only.split(" ").indexOf(role) === -1;
+        });
+        text("addUserTitle", details.add);
+        text("addUserBtn", details.add);
+        document.getElementById("newPosition").placeholder = details.position;
+        text("newUserCallout", details.callout);
         const select = document.getElementById("newUserOfficeCode");
-        field.hidden = !showOffice;
-        select.required = showOffice;
-        if (!showOffice) {
+        select.required = role === "offices";
+        if (role !== "offices") {
             select.value = "";
         }
     }
@@ -2397,6 +2518,238 @@
             analyticsState.period = button.getAttribute("data-analytics-period") || "month";
             loadAnalytics();
         });
+    });
+
+    /* ---------- Resetting Visitor Analytics ---------- */
+
+    // Deletes visit records after the admin picks what to delete, types RESET, and enters a
+    // fresh authenticator (or backup) code; the server checks all three again.
+    const resetDialog = document.getElementById("analyticsResetDialog");
+    const resetState = { counts: null, twoFactor: true, backupCodes: 0, method: "authenticator", busy: false };
+
+    function resetScope() {
+        const checked = document.querySelector("input[name='analyticsResetScope']:checked");
+        return checked ? checked.value : "all";
+    }
+
+    function plural(count, one, many) {
+        return Number(count || 0).toLocaleString() + " " + (Number(count) === 1 ? one : many);
+    }
+
+    function resetCountsFor(scope) {
+        return resetState.counts ? resetState.counts[scope] || null : null;
+    }
+
+    function renderResetImpact() {
+        const host = document.getElementById("analyticsResetImpact");
+        const live = document.getElementById("analyticsResetLive");
+        const scope = resetScope();
+        const counts = resetCountsFor(scope);
+        host.replaceChildren();
+        live.hidden = true;
+        if (!counts) {
+            host.appendChild(element("p", "acct-loading", "Counting records…"));
+            updateResetSubmit();
+            return;
+        }
+        host.appendChild(element("p", "reset-impact-title", "This will permanently delete:"));
+        const grid = element("div", "reset-impact-grid");
+        [
+            [counts.appointments, "Visit record", "Visit records"],
+            [counts.gps_points, "GPS point", "GPS points"],
+            [counts.tracking_sessions, "Tracking session", "Tracking sessions"],
+            [counts.notifications, "Notification", "Notifications"],
+        ].forEach(function (item) {
+            const cell = element("div", "reset-impact-item" + (Number(item[0]) > 0 ? "" : " is-zero"));
+            cell.append(element("strong", "", Number(item[0] || 0).toLocaleString()), element("span", "", Number(item[0]) === 1 ? item[1] : item[2]));
+            grid.appendChild(cell);
+        });
+        host.appendChild(grid);
+        const notes = [];
+        if (scope === "all" && counts.upcoming > 0) {
+            notes.push(plural(counts.upcoming, "upcoming booking", "upcoming bookings"));
+        }
+        if (counts.visits > 0) {
+            notes.push(plural(counts.visits, "multi-office visit", "multi-office visits"));
+        }
+        if (counts.oldest && counts.newest) {
+            const oldest = formatDateTime(counts.oldest);
+            const newest = formatDateTime(counts.newest);
+            notes.push(oldest === newest ? "dated " + oldest : "dated " + oldest + " to " + newest);
+        }
+        if (notes.length) {
+            host.appendChild(element("p", "reset-impact-note", "Includes " + notes.join(" · ")));
+        }
+        if (scope === "all" && counts.on_campus > 0) {
+            live.textContent = plural(counts.on_campus, "visitor is", "visitors are") +
+                " on campus right now. Their visit and live tracking end and are deleted too; Security will no longer see them.";
+            live.hidden = false;
+        }
+        updateResetSubmit();
+    }
+
+    function resetCodeValid() {
+        const code = document.getElementById("analyticsResetCode").value.trim();
+        return resetState.method === "backup_code"
+            ? code.replace(/[^A-Za-z0-9]/g, "").length === 10
+            : /^\d{6}$/.test(code);
+    }
+
+    function updateResetSubmit() {
+        const counts = resetCountsFor(resetScope());
+        const nothing = Boolean(counts) && !counts.appointments && !counts.gps_points && !counts.visits;
+        const confirmed = document.getElementById("analyticsResetConfirm").value.trim() === "RESET";
+        const submit = document.getElementById("analyticsResetSubmit");
+        submit.disabled = resetState.busy || !resetState.twoFactor || !counts || nothing || !confirmed || !resetCodeValid();
+        if (resetState.busy) {
+            submit.textContent = "Deleting…";
+        } else if (nothing) {
+            submit.textContent = "Nothing to delete";
+        } else {
+            submit.textContent = resetScope() === "all" ? "Delete all visitor data" : "Delete finished visits";
+        }
+    }
+
+    function setResetMethod(method) {
+        resetState.method = method;
+        const input = document.getElementById("analyticsResetCode");
+        const backup = method === "backup_code";
+        input.value = "";
+        input.maxLength = backup ? 12 : 6;
+        input.inputMode = backup ? "text" : "numeric";
+        input.placeholder = backup ? "Backup code" : "6-digit code";
+        text("analyticsResetCodeLabel", backup ? "Backup code" : "Authenticator code");
+        text("analyticsResetCodeHelp", backup
+            ? "One of the backup codes you saved when you set up two-step verification. Each code works once."
+            : "The same 6-digit code you enter when you sign in.");
+        const toggle = document.getElementById("analyticsResetMethodBtn");
+        toggle.textContent = backup ? "Use my authenticator app instead" : "Use a backup code instead";
+        toggle.hidden = !backup && resetState.backupCodes === 0;
+        updateResetSubmit();
+    }
+
+    async function openResetDialog() {
+        resetState.counts = null;
+        resetState.busy = false;
+        document.getElementById("analyticsResetForm").reset();
+        document.getElementById("analyticsResetNo2fa").hidden = true;
+        showMessage("analyticsResetError", "");
+        setResetMethod("authenticator");
+        renderResetImpact();
+        resetDialog.showModal();
+        try {
+            const data = await fetchJson("admin_analytics_reset.php", { cache: "no-store" });
+            if (!data || !data.success) {
+                showMessage("analyticsResetError", (data && data.message) || "Could not count the visit records.");
+                return;
+            }
+            resetState.counts = data.scopes || null;
+            resetState.twoFactor = Boolean(data.two_factor_enabled);
+            resetState.backupCodes = Number(data.backup_codes_remaining || 0);
+            document.getElementById("analyticsResetNo2fa").hidden = resetState.twoFactor;
+            document.getElementById("analyticsResetCodeField").hidden = !resetState.twoFactor;
+            setResetMethod("authenticator");
+            renderResetImpact();
+            document.getElementById("analyticsResetConfirm").focus();
+        } catch (error) {
+            if (error.message !== "Not authenticated") {
+                showMessage("analyticsResetError", "Could not reach the server. Please try again.");
+            }
+        }
+    }
+
+    function closeResetDialog() {
+        if (resetState.busy) {
+            return;
+        }
+        document.getElementById("analyticsResetCode").value = "";
+        if (resetDialog.open) {
+            resetDialog.close();
+        }
+    }
+
+    async function submitReset(event) {
+        event.preventDefault();
+        updateResetSubmit();
+        if (document.getElementById("analyticsResetSubmit").disabled) {
+            return;
+        }
+        const scope = resetScope();
+        resetState.busy = true;
+        updateResetSubmit();
+        showMessage("analyticsResetError", "");
+        try {
+            const data = await fetchJson("admin_analytics_reset.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    scope: scope,
+                    confirm: document.getElementById("analyticsResetConfirm").value.trim(),
+                    method: resetState.method,
+                    code: document.getElementById("analyticsResetCode").value.trim(),
+                }),
+            });
+            if (!data || !data.success) {
+                let message = (data && data.message) || "The reset did not go through.";
+                if (data && data.attempts_remaining != null && data.attempts_remaining <= 3) {
+                    message += " " + plural(data.attempts_remaining, "try", "tries") + " left before sign-in is paused.";
+                }
+                showMessage("analyticsResetError", message);
+                document.getElementById("analyticsResetCode").value = "";
+                document.getElementById("analyticsResetCode").focus();
+                return;
+            }
+            const deleted = data.deleted || {};
+            const parts = [plural(deleted.appointments, "visit record", "visit records")];
+            if (deleted.gps_points) {
+                parts.push(plural(deleted.gps_points, "GPS point", "GPS points"));
+            }
+            if (deleted.tracking_sessions) {
+                parts.push(plural(deleted.tracking_sessions, "tracking session", "tracking sessions"));
+            }
+            resetState.busy = false;
+            closeResetDialog();
+            showMessage("analyticsResetDone", "Visitor data reset (" + (scope === "all" ? "all visitor data" : "finished visits") + "): deleted " +
+                parts.join(", ") + ". The reset is recorded in the activity log.");
+            loadAnalytics();
+            loadDashboard();
+        } catch (error) {
+            if (error.message !== "Not authenticated") {
+                showMessage("analyticsResetError", "Could not reach the server. Nothing was deleted; please try again.");
+            }
+        } finally {
+            resetState.busy = false;
+            updateResetSubmit();
+        }
+    }
+
+    document.getElementById("analyticsResetBtn").addEventListener("click", function () {
+        showMessage("analyticsResetDone", "");
+        openResetDialog();
+    });
+    document.getElementById("analyticsResetForm").addEventListener("submit", submitReset);
+    document.querySelectorAll("input[name='analyticsResetScope']").forEach(function (input) {
+        input.addEventListener("change", renderResetImpact);
+    });
+    document.getElementById("analyticsResetConfirm").addEventListener("input", updateResetSubmit);
+    document.getElementById("analyticsResetCode").addEventListener("input", function (event) {
+        if (resetState.method === "authenticator") {
+            event.target.value = event.target.value.replace(/\D/g, "").slice(0, 6);
+        }
+        updateResetSubmit();
+    });
+    document.getElementById("analyticsResetMethodBtn").addEventListener("click", function () {
+        setResetMethod(resetState.method === "authenticator" ? "backup_code" : "authenticator");
+        document.getElementById("analyticsResetCode").focus();
+    });
+    document.querySelectorAll("[data-reset-cancel]").forEach(function (button) {
+        button.addEventListener("click", closeResetDialog);
+    });
+    resetDialog.addEventListener("cancel", function (event) {
+        if (resetState.busy) {
+            event.preventDefault();
+        }
+        document.getElementById("analyticsResetCode").value = "";
     });
 
     const routeOfficeFilter = document.getElementById("routeOfficeFilter");
@@ -2534,9 +2887,8 @@
     function openAddUser(role, officeCode) {
         document.getElementById("addUserForm").reset();
         usernameEdited = false;
-        if (role) {
-            document.getElementById("newUserRole").value = role;
-        }
+        document.getElementById("newUserRole").value = role || "offices";
+        fillDepartmentSelects();
         updateOfficeField();
         if (officeCode) {
             document.getElementById("newUserOfficeCode").value = officeCode;
@@ -2557,7 +2909,11 @@
     });
     document.getElementById("closeAddUserBtn").addEventListener("click", closeAddUserDialog);
     document.getElementById("cancelAddUserBtn").addEventListener("click", closeAddUserDialog);
-    document.getElementById("newUserRole").addEventListener("change", updateOfficeField);
+    document.getElementById("newRoleCards").addEventListener("change", function (event) {
+        document.getElementById("newUserRole").value = event.target.value;
+        updateOfficeField();
+    });
+
     addUserDialog.addEventListener("click", function (event) {
         if (event.target === addUserDialog) {
             closeAddUserDialog();
@@ -2591,7 +2947,7 @@
             return;
         }
         if (payload.role === "offices" && !payload.office_code) {
-            showMessage("adminFormError", "Select the department this person works in.");
+            showMessage("adminFormError", "Select the office this person works in.");
             return;
         }
         addButton.disabled = true;
@@ -2638,6 +2994,7 @@
             return Number(item.id) === Number(button.dataset.userId);
         });
         const label = user ? (user.display_name || user.username) : "this user";
+        showMessage("adminListSuccess", "");
         if (button.dataset.action === "manage") {
             openManageUser(Number(button.dataset.userId));
             return;
@@ -2645,7 +3002,14 @@
         if (button.dataset.action === "status") {
             const nextActive = Number(button.dataset.nextActive) === 1;
             const actionLabel = nextActive ? "activate" : "suspend";
-            if (!window.confirm("Do you want to " + actionLabel + " " + label + "?")) {
+            if (!(await AppDialog.confirm(nextActive
+                ? { title: "Activate " + label + "?", message: "They can sign in again.", confirmLabel: "Activate account" }
+                : {
+                    title: "Suspend " + label + "?",
+                    message: "They are signed out everywhere and can't sign in until you activate the account again.",
+                    confirmLabel: "Suspend account",
+                    danger: true,
+                }))) {
                 return;
             }
             button.disabled = true;
@@ -2659,20 +3023,20 @@
                     }),
                 });
                 if (!statusData || !statusData.success) {
-                    window.alert((statusData && statusData.message) || "Could not update account status.");
                     button.disabled = false;
+                    AppDialog.alert({ title: "Couldn't " + actionLabel + " " + label, message: (statusData && statusData.message) || "Please try again." });
                     return;
                 }
                 await loadUsers();
             } catch (error) {
                 if (error.message !== "Not authenticated") {
-                    window.alert("Could not reach the server. Please try again.");
                     button.disabled = false;
+                    AppDialog.alert(error instanceof TypeError ? NO_CONNECTION : { title: "Couldn't " + actionLabel + " " + label, message: error.message });
                 }
             }
             return;
         }
-        if (!window.confirm("Remove " + label + "? This cannot be undone.")) {
+        if (!(await AppDialog.confirm(removalQuestion(user, label)))) {
             return;
         }
         button.disabled = true;
@@ -2685,18 +3049,19 @@
                 });
             });
             if (!data || !data.success) {
-                if (!data || !data.cancelled) {
-                    window.alert((data && data.message) || "Could not remove user.");
-                }
                 button.disabled = false;
+                if (!data || !data.cancelled) {
+                    AppDialog.alert({ title: "Couldn't remove " + label, message: (data && data.message) || "Please try again." });
+                }
                 return;
             }
             await loadUsers();
             loadSecurity();
+            showMessage("adminListSuccess", data.message || "Removed " + label + ".");
         } catch (error) {
             if (error.message !== "Not authenticated") {
-                window.alert("Could not reach the server. Please try again.");
                 button.disabled = false;
+                AppDialog.alert(error instanceof TypeError ? NO_CONNECTION : { title: "Couldn't remove " + label, message: error.message });
             }
         }
     });
@@ -2730,13 +3095,13 @@
                 body: JSON.stringify({ action: "unlock", lockout_id: Number(button.dataset.lockId) }),
             });
             if (!data || !data.success) {
-                window.alert((data && data.message) || "Could not unlock.");
+                AppDialog.alert({ title: "Couldn't unlock this sign-in", message: (data && data.message) || "Please try again." });
             }
             await loadSecurity();
             loadUsers();
         } catch (error) {
             if (error.message !== "Not authenticated") {
-                window.alert("Could not reach the server. Please try again.");
+                AppDialog.alert(error instanceof TypeError ? NO_CONNECTION : { title: "Couldn't unlock this sign-in", message: error.message });
             }
         } finally {
             button.disabled = false;
@@ -2817,7 +3182,7 @@
         renderUsers();
     });
 
-    document.getElementById("addDepartmentBtn").addEventListener("click", function () {
+    document.getElementById("addOfficeBtn").addEventListener("click", function () {
         showMessage("departmentsSuccess", "");
         openDepartmentDialog(null);
     });

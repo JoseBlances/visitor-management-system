@@ -1,7 +1,8 @@
 <?php
 /*
- * Departments people can choose from (booking forms, account forms, map pins).
- * Administrators can add ?all=1 to include archived departments.
+ * Offices people can choose from (booking forms, account forms, map pins). A visitor gets the offices
+ * they can book: those with someone to answer (appointment_office_bookable_map()). Administrators can
+ * add ?all=1 to include archived offices.
  */
 require_once __DIR__ . "/db.php";
 require_once __DIR__ . "/session_bootstrap.php";
@@ -9,9 +10,10 @@ require_once __DIR__ . "/personnel.php";
 
 require_login_json();
 
-$includeArchived = !empty($_GET["all"]) && auth_role_can((string) $_SESSION["role"], "departments.manage");
+$role = (string) $_SESSION["role"];
+$includeArchived = !empty($_GET["all"]) && auth_role_can($role, "departments.manage");
 $active = appointment_office_active_map();
-$map = $includeArchived ? appointment_office_map() : $active;
+$map = $includeArchived ? appointment_office_map() : ($role === "visitor" ? appointment_office_bookable_map() : $active);
 
 $locations = [];
 if (personnel_schema_ready($conn)) {

@@ -42,6 +42,13 @@ const SETUP_FILES = [
     "live_monitoring_migration.sql" => null,
     "visitor_arrival_migration.sql" => null,
     "campus_routes_migration.sql" => null,
+    "office_breaks_migration.sql" => null,
+    "indoor_directions_migration.sql" => null,
+    "teacher_visits_migration.sql" => null,
+    "school_accounts_migration.sql" => null,
+    "account_removal_migration.sql" => null,
+    "password_reset_code_migration.sql" => null,
+    "visitor_only_migration.sql" => null,
 ];
 const SETUP_CAMPUS_SEED = "campus_map_isatu_seed.sql";
 const SETUP_PUBLISHED_PASSWORD = "password";
@@ -66,7 +73,7 @@ function setup_connect(array $db, int $waitSeconds): mysqli
         try {
             $conn = new mysqli($db["host"], $db["user"], $db["password"], $db["name"], $db["port"]);
             $conn->set_charset("utf8mb4");
-            $conn->query("SET time_zone = '+08:00', collation_connection = 'utf8mb4_general_ci'");
+            $conn->query("SET NAMES utf8mb4 COLLATE utf8mb4_general_ci, time_zone = '+08:00'"); // as db.php
             return $conn;
         } catch (Throwable $error) {
             if (time() >= $deadline) {

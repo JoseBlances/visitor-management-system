@@ -15,23 +15,57 @@ class VisitorRepository(
     val installationStore: InstallationStore,
     private val locationQueue: LocationQueueDao,
     private val campusMapCache: CampusMapCache,
+    private val directionPhotos: DirectionPhotoStore,
 ) {
     val signedIn: StateFlow<Boolean> = tokenStore.signedIn
+    val savedName: String? get() = tokenStore.savedName
 
-    suspend fun register(email: String, fullName: String, contactNumber: String, password: String): RegisterData =
-        apiClient.requireData(
-            apiClient.api.register(
-                RegisterRequest(email, fullName, contactNumber, password, true, BuildConfig.CONSENT_VERSION),
+    /** The email last signed in with on this phone, for the sign-in screen. */
+    val lastEmail: String? get() = installationStore.lastEmail
+
+    /** Starts an account and emails a code to it. Nothing is created until [confirmSignup]. */
+    suspend fun register(request: RegisterRequest): SignupCodeData =
+        apiClient.requireData(apiClient.api.register(request))
+
+    suspend fun resendCode(requestId: Long): SignupCodeData =
+        apiClient.requireData(apiClient.api.resendCode(ResendCodeRequest(requestId)))
+
+
+    /**
+     * The code from the email: the account is created and signed in, with the notice agreed to at
+     * sign-up. [beforeSignIn] gets the new account just before the app switches to it.
+     */
+    suspend fun confirmSignup(requestId: Long, code: String, beforeSignIn: (UserDto) -> Unit = {}): UserDto {
+        val result = apiClient.requireData(
+            apiClient.api.confirmSignup(
+                ConfirmSignupRequest(requestId, code, installationStore.installationId, installationStore.deviceName),
             ),
         )
+        saveNoticeAgreement(result.user.id)
+        installationStore.lastEmail = result.user.email.ifBlank { null } ?: installationStore.lastEmail
+        beforeSignIn(result.user)
+        tokenStore.saveToken(result.accessToken)
+        tokenStore.savedName = result.user.fullName
+        return result.user
+    }
 
-    suspend fun login(identifier: String, password: String): UserDto {
+    /** Has this account agreed to the current notice on this phone? The server sees it with their next visit. */
+    fun agreedToNotice(userId: Long): Boolean =
+        installationStore.agreedNotice(userId) == BuildConfig.CONSENT_VERSION
+
+    fun saveNoticeAgreement(userId: Long) = installationStore.saveAgreedNotice(userId, BuildConfig.CONSENT_VERSION)
+
+    /** [beforeSignIn] gets the account just before the app switches to it, as [confirmSignup] does. */
+    suspend fun login(identifier: String, password: String, beforeSignIn: (UserDto) -> Unit = {}): UserDto {
         val result = apiClient.requireData(
             apiClient.api.login(
                 LoginRequest(identifier, password, installationStore.installationId, installationStore.deviceName),
             ),
         )
+        installationStore.lastEmail = result.user.email.ifBlank { identifier }
+        beforeSignIn(result.user)
         tokenStore.saveToken(result.accessToken)
+        tokenStore.savedName = result.user.fullName
         return result.user
     }
 
@@ -43,6 +77,7 @@ class VisitorRepository(
             tokenStore.clear()
             installationStore.clearActiveTracking()
             campusMapCache.clear()
+            directionPhotos.clear()
         }
     }
 
@@ -53,12 +88,15 @@ class VisitorRepository(
         apiClient.requireData(apiClient.api.resetPassword(ResetPasswordRequest(email, token, password)))
     }
 
-    suspend fun profile(): UserDto = apiClient.requireData(apiClient.api.me()).user
+    suspend fun profile(): UserDto =
+        apiClient.requireData(apiClient.api.me()).user.also { tokenStore.savedName = it.fullName }
 
     suspend fun updateProfile(fullName: String, contactNumber: String): UserDto =
         apiClient.requireData(apiClient.api.updateProfile(ProfileUpdateRequest(fullName, contactNumber))).user
+            .also { tokenStore.savedName = it.fullName }
 
     suspend fun offices(): List<OfficeDto> = apiClient.requireData(apiClient.api.offices()).offices
+
 
     suspend fun availability(officeCode: String, date: String): AvailabilityData =
         apiClient.requireData(apiClient.api.availability(officeCode, date))
@@ -159,9 +197,18 @@ class VisitorRepository(
 
     fun cachedCampusMap(appointmentId: Long): CampusMapData? = campusMapCache.load(appointmentId)
 
+    /** Saves the photos of this visit's directions on the phone, for places with poor signal. */
+    suspend fun saveDirectionPhotos(map: CampusMapData) {
+        directionPhotos.keepOnly(map.stops.flatMap { it.directionSteps }.map { it.photo }.filter { it.isNotBlank() }.toSet())
+    }
+
     /** Tells the server (and so Security and the office) that the visitor reached a stop. */
     suspend fun reportArrival(request: ArrivalRequest): ArrivalData =
         apiClient.requireData(apiClient.api.reportArrival(request))
+
+    /** "I can't find it": tells the office which step the visitor stopped at. */
+    suspend fun requestDirectionHelp(stopAppointmentId: Long, stepNumber: Int?): DirectionHelpData =
+        apiClient.requireData(apiClient.api.requestDirectionHelp(DirectionHelpRequest(stopAppointmentId, stepNumber)))
 
     suspend fun queueLocation(appointmentId: Long, sessionId: Long, location: Location) {
         locationQueue.insert(

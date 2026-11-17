@@ -27,15 +27,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CalendarMonth
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LocationOn
+import androidx.compose.material.icons.rounded.Map
 import androidx.compose.material.icons.rounded.MarkEmailRead
 import androidx.compose.material.icons.rounded.Notifications
-import androidx.compose.material.icons.rounded.PendingActions
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Refresh
@@ -48,6 +48,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -60,8 +61,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -78,6 +77,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -86,8 +86,11 @@ import kotlinx.coroutines.delay
 import ph.edu.isatu.visitor.BuildConfig
 import ph.edu.isatu.visitor.data.AppointmentDto
 import ph.edu.isatu.visitor.data.NotificationDto
+import ph.edu.isatu.visitor.data.UserDto
 import ph.edu.isatu.visitor.data.VisitSummaryDto
 import java.text.SimpleDateFormat
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private data class MainTab(val label: String, val icon: ImageVector)
@@ -105,6 +108,7 @@ private enum class HeaderScreen { Notifications, Profile }
 fun MainShell(state: VisitorUiState, viewModel: AppViewModel) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var headerScreen by remember { mutableStateOf<HeaderScreen?>(null) }
+    var noticeOpen by remember { mutableStateOf(false) }
     // Office decisions and suggested times arrive as notifications. Check whenever the
     // app returns to the foreground and every 30 seconds while it stays open.
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -131,59 +135,30 @@ fun MainShell(state: VisitorUiState, viewModel: AppViewModel) {
         VisitDetailScreen(visit, state.tracking, state.busy, viewModel, state.campusMap, state.error ?: state.message)
         return
     }
+    if (noticeOpen) {
+        TermsNoticeScreen("Back to profile") { noticeOpen = false }
+        return
+    }
 
     Scaffold(
         containerColor = AppBackground,
         topBar = {
-            Column {
-                TopAppBar(
-                    title = { PortalBrand(subtitle = "Visitor mobile application") },
-                    actions = {
-                        IconButton(onClick = {
-                            headerScreen = HeaderScreen.Notifications
-                            viewModel.refreshNotifications()
-                        }) {
-                            BadgedBox(
-                                badge = {
-                                    if (state.unreadCount > 0) {
-                                        Badge(containerColor = Color(0xFFD92D20)) {
-                                            Text(state.unreadCount.coerceAtMost(99).toString())
-                                        }
-                                    }
-                                },
-                            ) {
-                                Icon(Icons.Rounded.Notifications, contentDescription = "Notifications", tint = IsatuBlueDark)
-                            }
-                        }
-                        IconButton(onClick = { headerScreen = HeaderScreen.Profile }) {
-                            Icon(Icons.Rounded.Person, contentDescription = "Profile", tint = IsatuBlueDark)
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White),
-                )
-                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = IsatuBlue)
-            }
+            MainTopBar(
+                unreadCount = state.unreadCount,
+                busy = state.busy,
+                // On Home the navy goes on into the greeting, and the gold edge comes under that.
+                goldEdge = !(headerScreen == null && selectedTab == 0),
+                onNotifications = {
+                    headerScreen = HeaderScreen.Notifications
+                    viewModel.refreshNotifications()
+                },
+                onProfile = { headerScreen = HeaderScreen.Profile },
+            )
         },
         bottomBar = {
-            NavigationBar(containerColor = Color.White, tonalElevation = 8.dp) {
-                tabs.forEachIndexed { index, tab ->
-                    NavigationBarItem(
-                        selected = headerScreen == null && selectedTab == index,
-                        onClick = {
-                            selectedTab = index
-                            headerScreen = null
-                        },
-                        icon = { Icon(tab.icon, contentDescription = tab.label) },
-                        label = { Text(tab.label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = IsatuBlue,
-                            selectedTextColor = IsatuBlueDark,
-                            indicatorColor = BlueSurface,
-                            unselectedIconColor = MutedInk,
-                            unselectedTextColor = MutedInk,
-                        ),
-                    )
-                }
+            MainBottomBar(selected = if (headerScreen == null) selectedTab else null) { index ->
+                selectedTab = index
+                headerScreen = null
             }
         },
     ) { innerPadding ->
@@ -199,13 +174,14 @@ fun MainShell(state: VisitorUiState, viewModel: AppViewModel) {
             }
             when (headerScreen) {
                 HeaderScreen.Notifications -> NotificationsScreen(state.notifications, state.unreadCount, viewModel)
-                HeaderScreen.Profile -> ProfileScreen(state, viewModel)
+                HeaderScreen.Profile -> ProfileScreen(state, viewModel, onOpenNotice = { noticeOpen = true })
                 null -> when (selectedTab) {
                     0 -> HomeScreen(
-                        state = state,
-                        viewModel = viewModel,
+                        user = state.user,
+                        appointments = state.appointments,
+                        onOpenAppointment = viewModel::openAppointment,
+                        onOpenVisit = viewModel::openVisit,
                         onBook = { selectedTab = 2 },
-                        onAppointments = { selectedTab = 1 },
                     )
                     1 -> AppointmentsScreen(state.appointments, viewModel::openAppointment, viewModel::openVisit, viewModel::refreshAll)
                     else -> BookingScreen(state, viewModel)
@@ -215,12 +191,74 @@ fun MainShell(state: VisitorUiState, viewModel: AppViewModel) {
     }
 }
 
+/** The bar over the tabs: the seal and the app's name, notifications, and the profile. */
 @Composable
-private fun HomeScreen(
-    state: VisitorUiState,
-    viewModel: AppViewModel,
+internal fun MainTopBar(
+    unreadCount: Int,
+    busy: Boolean,
+    goldEdge: Boolean,
+    onNotifications: () -> Unit,
+    onProfile: () -> Unit,
+) {
+    Column {
+        NavyTopBar(
+            title = { PortalBrand(onNavy = true) },
+            actions = {
+                IconButton(onClick = onNotifications) {
+                    BadgedBox(
+                        badge = {
+                            if (unreadCount > 0) {
+                                Badge(containerColor = IsatuYellow, contentColor = IsatuBlueDark) {
+                                    Text(unreadCount.coerceAtMost(99).toString(), fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        },
+                    ) {
+                        Icon(Icons.Rounded.Notifications, contentDescription = "Notifications")
+                    }
+                }
+                IconButton(onClick = onProfile) {
+                    Icon(Icons.Rounded.Person, contentDescription = "Profile")
+                }
+            },
+            goldEdge = goldEdge,
+        )
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = IsatuYellow, trackColor = IsatuBlueDark)
+    }
+}
+
+/** Home, Visits and Book. The chosen tab sits on a gold pill. */
+@Composable
+internal fun MainBottomBar(selected: Int?, onSelect: (Int) -> Unit) {
+    Column {
+        HorizontalDivider(color = BorderSoft)
+        NavigationBar(containerColor = Color.White, tonalElevation = 0.dp) {
+            tabs.forEachIndexed { index, tab ->
+                NavigationBarItem(
+                    selected = selected == index,
+                    onClick = { onSelect(index) },
+                    icon = { Icon(tab.icon, contentDescription = tab.label) },
+                    label = { Text(tab.label, fontWeight = if (selected == index) FontWeight.SemiBold else FontWeight.Normal) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = IsatuBlueDark,
+                        selectedTextColor = IsatuBlueDark,
+                        indicatorColor = IsatuYellow,
+                        unselectedIconColor = MutedInk,
+                        unselectedTextColor = MutedInk,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun HomeScreen(
+    user: UserDto?,
+    appointments: List<AppointmentDto>,
+    onOpenAppointment: (Long) -> Unit,
+    onOpenVisit: (Long) -> Unit,
     onBook: () -> Unit,
-    onAppointments: () -> Unit,
 ) {
     val context = LocalContext.current
     var notificationsAllowed by remember {
@@ -232,165 +270,282 @@ private fun HomeScreen(
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> notificationsAllowed = granted }
+    var showSteps by remember { mutableStateOf(false) }
 
-    val upcoming = groupVisits(state.appointments).filter { it.isActive }.minByOrNull { it.startsAt }
-    val firstName = state.user?.fullName?.trim()?.substringBefore(' ')?.ifBlank { "Visitor" } ?: "Visitor"
+    val upcoming = groupVisits(appointments).filter { it.isActive }.minByOrNull { it.startsAt }
+    val firstName = user?.fullName?.trim()?.substringBefore(' ')?.ifBlank { "Visitor" } ?: "Visitor"
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 28.dp),
+        contentPadding = PaddingValues(bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        // The greeting on navy, and the visit that matters now lifted over it, with the one thing
+        // to do next. Booking is the Book tab.
         item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = IsatuBlueDark),
-                shape = RoundedCornerShape(22.dp),
-            ) {
-                Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Welcome, $firstName", style = MaterialTheme.typography.headlineMedium, color = Color.White)
-                    Text(
-                        "Plan your visit, receive office decisions, and keep your visitor pass in one place.",
-                        color = Color(0xFFDCEBFF),
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    PrimaryButton(
-                        text = "Register a visit",
-                        onClick = onBook,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+            Column {
+                NavyBand(bottomSpace = 62.dp) { Greeting(firstName) }
+                Box(Modifier.padding(horizontal = 16.dp).liftedOver(46.dp)) {
+                    when (upcoming) {
+                        null -> NoVisitCard(onBook)
+                        is VisitListItem.Single -> NextVisitCard(homeCard(upcoming)) { onOpenAppointment(upcoming.appointment.id) }
+                        is VisitListItem.MultiStop -> NextVisitCard(homeCard(upcoming)) { onOpenVisit(upcoming.summary.id) }
+                    }
                 }
             }
         }
-
-        item {
-            SectionHeading("Quick actions")
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                QuickActionCard("Register visit", "Walk in or schedule ahead", Icons.Rounded.Add, onBook, Modifier.weight(1f))
-                QuickActionCard("My visits", "View requests and QR passes", Icons.Rounded.QrCode2, onAppointments, Modifier.weight(1f))
-            }
-        }
-
         if (!notificationsAllowed) {
             item {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = YellowSurface),
-                    shape = RoundedCornerShape(18.dp),
-                    border = BorderStroke(1.dp, Color(0xFFF4D86C)),
-                ) {
-                    Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Icon(Icons.Rounded.Notifications, contentDescription = null, tint = Color(0xFF9A6700))
-                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Turn on appointment updates", style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                "Get notified when an office approves, declines, or suggests another schedule.",
-                                color = MutedInk,
-                            )
-                            TextButton(
-                                onClick = {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                    }
-                                },
-                            ) {
-                                Text("Enable notifications")
-                            }
+                Box(Modifier.padding(horizontal = 16.dp)) {
+                    NotificationsPrompt {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
                     }
                 }
             }
         }
-
+        // Until a visitor's first booking the steps show in full; after that, behind a link.
         item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                SectionHeading("Next visit", Modifier.weight(1f))
-                TextButton(onClick = onAppointments) { Text("View all") }
-            }
-            Spacer(Modifier.height(8.dp))
-            if (upcoming == null) {
-                EmptyState("No upcoming visit", "Request an appointment when you are ready to visit the campus.")
+            if (appointments.isEmpty()) {
+                Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "How a visit works",
+                        modifier = Modifier.padding(start = 4.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MutedInk,
+                    )
+                    VisitStepsCard()
+                }
             } else {
-                VisitListCard(upcoming, viewModel::openAppointment, viewModel::openVisit)
-            }
-        }
-
-        item {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                border = BorderStroke(1.dp, BorderSoft),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("How your visit works", style = MaterialTheme.typography.titleLarge, color = IsatuBlueDark)
-                    VisitStep(Icons.Rounded.PendingActions, "1", "Register", "Choose walk-in or appointment and tell us where you are going.")
-                    VisitStep(Icons.Rounded.CheckCircle, "2", "Get your pass", "Walk-ins receive it now; appointments receive it after approval.")
-                    VisitStep(Icons.Rounded.QrCode2, "3", "Present your pass", "An approved visit receives a secure QR pass.")
-                    VisitStep(Icons.Rounded.LocationOn, "4", "Check in", "Location sharing starts only after Security check-in and your permission.")
+                TextButton(onClick = { showSteps = true }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Rounded.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.size(6.dp))
+                    Text("How a visit works")
                 }
             }
         }
     }
+    if (showSteps) {
+        AlertDialog(
+            onDismissRequest = { showSteps = false },
+            title = { Text("How a visit works") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { VisitSteps() } },
+            confirmButton = { TextButton(onClick = { showSteps = false }) { Text("Got it") } },
+        )
+    }
 }
 
 @Composable
-private fun SectionHeading(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = MaterialTheme.typography.titleLarge, color = Ink, modifier = modifier)
+private fun Greeting(firstName: String) {
+    val now = remember { LocalDateTime.now(ManilaZone) }
+    val greeting = when (now.hour) {
+        in 5..11 -> "Good morning"
+        in 12..17 -> "Good afternoon"
+        else -> "Good evening"
+    }
+    Column {
+        Text(
+            "$greeting, $firstName",
+            style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp, lineHeight = 30.sp),
+            color = Color.White,
+        )
+        Text(
+            now.format(DateTimeFormatter.ofPattern("EEEE, MMMM d", Locale.US)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = OnNavyMuted,
+        )
+    }
+}
+
+private enum class Tone(val background: Color, val content: Color) {
+    Green(Color(0xFFDCFCE7), IsatuGreen),
+    Yellow(Color(0xFFFFF4CC), Color(0xFF9A6700)),
+    Blue(BlueSurface, IsatuBlueDark),
+    Grey(Color(0xFFE8EEF7), Color(0xFF475569)),
+}
+
+/** What the Home card says about a visit: where it stands, when it is, and the one thing to do. */
+private data class HomeCard(
+    val state: String,
+    val tone: Tone,
+    val title: String,
+    val timeIcon: ImageVector,
+    val time: String,
+    val note: String,
+    val action: String? = null,
+    val actionIcon: ImageVector? = null,
+)
+
+private fun homeCard(item: VisitListItem): HomeCard = when (item) {
+    is VisitListItem.Single -> {
+        val appointment = item.appointment
+        val office = appointment.office.name
+        val time = visitTimeText(appointment)
+        when (appointment.status) {
+            // The visit list does not carry the suggested times; the visit screen shows them.
+            "reschedule_proposed" -> HomeCard(
+                "New time suggested", Tone.Yellow, office, Icons.Rounded.Schedule, "Requested: $time",
+                "The office suggested another time. Accept it or pick a new one.", "Respond",
+            )
+            "checked_in" -> HomeCard(
+                "On campus", Tone.Blue, office, Icons.Rounded.LocationOn,
+                appointment.checkedInAt?.let { "Checked in at ${formatTimeOfDay(it)}" } ?: time,
+                "Directions and your pass are on the map.", "Open map", Icons.Rounded.Map,
+            )
+            "approved" -> HomeCard(
+                "Approved · pass ready", Tone.Green, office, Icons.Rounded.Schedule, time, appointment.subject,
+                "Show pass", Icons.Rounded.QrCode2,
+            )
+            else -> HomeCard(
+                "Waiting for approval", Tone.Grey, office, Icons.Rounded.Schedule, time,
+                "You'll get a notification when the office decides.",
+            )
+        }
+    }
+    is VisitListItem.MultiStop -> {
+        val stops = item.stops
+        val title = "${stops.size} office stops"
+        val first = stops.firstOrNull()
+        val time = when {
+            first == null -> ""
+            first.visitType == "walk_in" -> visitTimeText(first)
+            else -> formatVisitStart(first.scheduledStartAt)
+        }
+        when {
+            stops.any { it.status == "reschedule_proposed" } -> HomeCard(
+                "New time suggested", Tone.Yellow, title, Icons.Rounded.Schedule, time,
+                "An office suggested another time for its stop.", "Respond",
+            )
+            item.summary.status == "checked_in" -> HomeCard(
+                "On campus", Tone.Blue, title, Icons.Rounded.LocationOn,
+                stops.firstNotNullOfOrNull { it.checkedInAt }?.let { "Checked in at ${formatTimeOfDay(it)}" } ?: time,
+                "Directions and your pass are on the map.", "Open map", Icons.Rounded.Map,
+            )
+            // One pass covers the visit as soon as one office approves its stop.
+            stops.any { it.status == "approved" } -> HomeCard(
+                "Pass ready", Tone.Green, title, Icons.Rounded.Schedule, time,
+                stops.joinToString(" → ") { it.office.name }, "Show pass", Icons.Rounded.QrCode2,
+            )
+            else -> HomeCard(
+                "Waiting for approval", Tone.Grey, title, Icons.Rounded.Schedule, time,
+                "Each office reviews its own stop. You'll get a notification.",
+            )
+        }
+    }
 }
 
 @Composable
-private fun SummaryCard(
-    value: String,
-    label: String,
-    icon: ImageVector,
-    color: Color,
-    modifier: Modifier = Modifier,
-) {
+private fun NextVisitCard(card: HomeCard, onOpen: () -> Unit) {
     Card(
-        modifier = modifier,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        border = BorderStroke(1.dp, BorderSoft),
-        shape = RoundedCornerShape(18.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        shape = RoundedCornerShape(22.dp),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.size(38.dp).clip(CircleShape).background(color.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(21.dp))
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.background(card.tone.background, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text(card.state, color = card.tone.content, style = MaterialTheme.typography.labelLarge)
+                }
+                Spacer(Modifier.weight(1f))
+                Icon(Icons.Rounded.ChevronRight, contentDescription = "Open visit", tint = MutedInk)
             }
-            Text(value, style = MaterialTheme.typography.headlineMedium, color = color)
-            Text(label, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+            Text(card.title, style = MaterialTheme.typography.titleLarge, color = Ink)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(card.timeIcon, contentDescription = null, tint = MutedInk, modifier = Modifier.size(18.dp))
+                Text(card.time)
+            }
+            if (card.note.isNotBlank()) {
+                Text(
+                    card.note,
+                    color = MutedInk,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            card.action?.let { action ->
+                PrimaryButton(action, onOpen, Modifier.fillMaxWidth().padding(top = 4.dp), icon = card.actionIcon)
+            }
         }
     }
 }
 
 @Composable
-private fun QuickActionCard(
-    title: String,
-    body: String,
-    icon: ImageVector,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+private fun NoVisitCard(onBook: () -> Unit) {
     Card(
-        modifier = modifier.clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        shape = RoundedCornerShape(22.dp),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("No upcoming visits", style = MaterialTheme.typography.titleLarge, color = Ink)
+            Text("Book a walk-in or an appointment.", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+            PrimaryButton("Book a visit", onBook, Modifier.fillMaxWidth().padding(top = 4.dp), icon = Icons.Rounded.Add)
+        }
+    }
+}
+
+@Composable
+private fun NotificationsPrompt(onEnable: () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = YellowSurface),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, Color(0xFFF4D86C)),
+    ) {
+        Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(Icons.Rounded.Notifications, contentDescription = null, tint = Color(0xFF9A6700))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Turn on appointment updates", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Get notified when an office approves, declines, or suggests another schedule.",
+                    color = MutedInk,
+                )
+                TextButton(onClick = onEnable) { Text("Enable notifications") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VisitStepsCard() {
+    Card(
         colors = CardDefaults.cardColors(containerColor = Color.White),
         border = BorderStroke(1.dp, BorderSoft),
         shape = RoundedCornerShape(18.dp),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(icon, contentDescription = null, tint = IsatuBlue, modifier = Modifier.size(28.dp))
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(body, color = MutedInk, style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            VisitSteps(divided = true)
         }
     }
 }
 
+/** The four steps of a visit, short enough to read at a glance. */
 @Composable
-private fun VisitStep(icon: ImageVector, number: String, title: String, body: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-        Box(Modifier.size(38.dp).clip(CircleShape).background(BlueSurface), contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = "Step $number", tint = IsatuBlue, modifier = Modifier.size(21.dp))
+private fun VisitSteps(divided: Boolean = false) {
+    val steps = listOf(
+        "Book a visit" to "A walk-in or an appointment, to an ISATU office.",
+        "Get your pass" to "Walk-ins get it at once. Appointments get it once the office approves.",
+        "Show it at the gate" to "Security scans it when you arrive.",
+        "Share your location" to "Only from check-in until your visit ends.",
+    )
+    steps.forEachIndexed { index, (title, body) ->
+        if (divided && index > 0) HorizontalDivider(color = Color(0xFFEDF1F6))
+        VisitStep(index + 1, title, body, if (divided) Modifier.padding(vertical = 12.dp) else Modifier)
+    }
+}
+
+@Composable
+private fun VisitStep(number: Int, title: String, body: String, modifier: Modifier = Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+        Box(Modifier.size(28.dp).clip(CircleShape).background(IsatuYellow), contentAlignment = Alignment.Center) {
+            Text(number.toString(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = IsatuBlueDark)
         }
         Column(Modifier.weight(1f)) {
-            Text("$number. $title", fontWeight = FontWeight.SemiBold)
+            Text(title, fontWeight = FontWeight.SemiBold, color = Ink)
             Text(body, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
         }
     }
@@ -515,23 +670,17 @@ private fun AppointmentsScreen(
     ) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("My visits", style = MaterialTheme.typography.headlineMedium, color = IsatuBlueDark)
-                    Text("Requests, visitor passes, and visit history", color = MutedInk)
-                }
-                IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Refresh") }
+                Text(
+                    "My visits",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp),
+                    color = IsatuBlueDark,
+                )
+                IconButton(onClick = onRefresh) { Icon(Icons.Rounded.Refresh, "Refresh", tint = IsatuBlueDark) }
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                filters.forEach { filter ->
-                    if (selectedFilter == filter) {
-                        FilledTonalButton(onClick = { selectedFilter = filter }) { Text(filter) }
-                    } else {
-                        OutlinedButton(onClick = { selectedFilter = filter }) { Text(filter) }
-                    }
-                }
-            }
+            ChoiceChips(filters.map { it to it }, selectedFilter, { selectedFilter = it })
         }
         if (visible.isEmpty()) {
             item { EmptyState("Nothing here yet", "Visits matching this filter will appear here.") }
@@ -595,7 +744,7 @@ private fun NotificationsScreen(
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Notifications", style = MaterialTheme.typography.headlineMedium, color = IsatuBlueDark)
+                    Text("Notifications", style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp), color = IsatuBlueDark)
                     Text(if (unreadCount == 0) "You are all caught up" else "$unreadCount unread notification(s)", color = MutedInk)
                 }
                 if (unreadCount > 0) TextButton(onClick = viewModel::markAllNotificationsRead) { Text("Mark all read") }
@@ -651,7 +800,7 @@ private fun NotificationCard(notification: NotificationDto, onClick: () -> Unit)
 }
 
 @Composable
-private fun ProfileScreen(state: VisitorUiState, viewModel: AppViewModel) {
+private fun ProfileScreen(state: VisitorUiState, viewModel: AppViewModel, onOpenNotice: () -> Unit) {
     var showEdit by remember { mutableStateOf(false) }
     val user = state.user
     LazyColumn(
@@ -660,8 +809,7 @@ private fun ProfileScreen(state: VisitorUiState, viewModel: AppViewModel) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item {
-            Text("My profile", style = MaterialTheme.typography.headlineMedium, color = IsatuBlueDark)
-            Text("Personal details and privacy controls", color = MutedInk)
+            Text("My profile", style = MaterialTheme.typography.headlineMedium.copy(fontSize = 24.sp), color = IsatuBlueDark)
         }
         item {
             Card(
@@ -709,6 +857,7 @@ private fun ProfileScreen(state: VisitorUiState, viewModel: AppViewModel) {
                         "Location is collected only after Security checks you in and while the tracking notification is visible. You can withdraw consent from the active visit.",
                         color = MutedInk,
                     )
+                    NoticeLink(onOpenNotice)
                 }
             }
         }
@@ -773,4 +922,13 @@ fun formatDateTime(value: String): String {
         val target = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.US)
         target.format(requireNotNull(source.parse(value)))
     }.getOrDefault(value)
+}
+
+/** The way back to the notice from Profile. */
+@Composable
+internal fun NoticeLink(onClick: () -> Unit) {
+    TextButton(onClick = onClick, contentPadding = PaddingValues(0.dp)) {
+        Text(TermsNotice.TITLE)
+        Icon(Icons.Rounded.ChevronRight, contentDescription = null)
+    }
 }

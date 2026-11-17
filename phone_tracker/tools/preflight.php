@@ -137,7 +137,7 @@ try {
     $db = isatu_db_settings();
     $conn = new mysqli($db["host"], $db["user"], $db["password"], $db["name"], $db["port"]);
     $conn->set_charset("utf8mb4");
-    $conn->query("SET time_zone = '+08:00', collation_connection = 'utf8mb4_general_ci'");
+    $conn->query("SET NAMES utf8mb4 COLLATE utf8mb4_general_ci, time_zone = '+08:00'"); // as db.php
 } catch (Throwable $error) {
     preflight_line("FAIL", "Cannot connect to the database: " . $error->getMessage());
     echo "\nResult: " . $failures . " problem(s) to fix, " . $warnings . " warning(s).\n";
@@ -159,7 +159,10 @@ $schemaChecks = [
     "visitor_presence" => ["appointment_id"],
     "campus_places" => ["place_type", "placed_by"],
     "campus_routes" => ["office_code", "points_json"],
+    "office_directions" => ["office_code", "visitor_message"],
+    "office_direction_steps" => ["office_code", "photo_path"],
     "offices" => ["code"],
+    "account_requests" => ["code_hash", "status"],
     "outbound_emails" => ["status"],
     "api_access_tokens" => ["id"],
     "user_trusted_devices" => ["id"],
@@ -218,7 +221,7 @@ while ($office = $result->fetch_assoc()) {
 }
 if ($officesWithoutStaff) {
     preflight_line("WARN", "No Office Personnel account for: " . implode(", ", $officesWithoutStaff)
-        . ". Their appointment requests and arrival notices reach nobody.");
+        . ". Visitors can't book them until someone is assigned.");
 }
 
 // The campus map.
@@ -231,25 +234,50 @@ if ($boundary < 3) {
     preflight_line("OK", "Campus map: " . $boundary . " boundary corners, " . $officePins . " office pin(s), " . $gates . " gate(s)");
 }
 $unpinned = [];
+$routeOnly = [];
+$routesReady = (bool) $conn->query("SHOW TABLES LIKE 'campus_routes'")->num_rows;
 $result = $conn->query(
-    "SELECT o.name FROM offices o
+    "SELECT o.name, " . ($routesReady ? "EXISTS (SELECT 1 FROM campus_routes r WHERE r.office_code = o.code)" : "0") . " AS has_route
+     FROM offices o
      WHERE o.is_active = 1
        AND NOT EXISTS (SELECT 1 FROM campus_places p WHERE p.place_type = 'office' AND p.office_code = o.code)
      ORDER BY o.sort_order, o.name"
 );
 while ($office = $result->fetch_assoc()) {
-    $unpinned[] = $office["name"];
+    if ((int) $office["has_route"] === 1) {
+        $routeOnly[] = $office["name"];
+    } else {
+        $unpinned[] = $office["name"];
+    }
 }
 if ($unpinned) {
     preflight_line("WARN", "Not on the campus map yet: " . implode(", ", $unpinned) . ". Visitors to them get no walking directions.");
 }
-$activeDepartments = (int) preflight_scalar($conn, "SELECT COUNT(*) FROM offices WHERE is_active = 1");
-$routedDepartments = (int) preflight_scalar(
+if ($routeOnly) {
+    preflight_line("WARN", "A walking route but no pin: " . implode(", ", $routeOnly)
+        . ". Visitors are guided to where the route ends; place the pin at the door in Campus Map > Offices.");
+}
+$activeOffices = (int) preflight_scalar($conn, "SELECT COUNT(*) FROM offices WHERE is_active = 1");
+$routedOffices = (int) preflight_scalar(
     $conn,
-    "SELECT COUNT(DISTINCT r.office_code) FROM campus_routes r INNER JOIN offices o ON o.code = r.office_code AND o.is_active = 1"
+    "SELECT COUNT(*) FROM offices o
+     WHERE o.is_active = 1
+       AND EXISTS (SELECT 1 FROM campus_routes r WHERE r.office_code = o.code)"
 );
-preflight_line("INFO", "Walking routes: " . $routedDepartments . " of " . $activeDepartments
-    . " department(s) have one (record them in Campus Map > Routes).");
+preflight_line("INFO", "Walking routes: " . $routedOffices . " of " . $activeOffices
+    . " office(s) have one (record them in Campus Map > Routes).");
+$directedOffices = (int) preflight_scalar(
+    $conn,
+    "SELECT COUNT(*) FROM offices o
+     WHERE o.is_active = 1
+       AND EXISTS (
+           SELECT 1 FROM office_directions d
+           WHERE d.office_code = o.code AND d.building <> '' AND d.floor <> ''
+             AND (d.visitor_message <> '' OR EXISTS (SELECT 1 FROM office_direction_steps s WHERE s.office_code = d.office_code))
+       )"
+);
+preflight_line("INFO", "Directions inside buildings: " . $directedOffices . " of " . $activeOffices
+    . " office(s) have them (write them in Campus Map > Inside).");
 
 // Background jobs: anything left waiting means the scheduler is not running.
 $stuckEmails = (int) preflight_scalar($conn, "SELECT COUNT(*) FROM outbound_emails WHERE status = 'queued' AND created_at < NOW() - INTERVAL 10 MINUTE");
